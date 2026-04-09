@@ -34,6 +34,7 @@ export type Message = {
   viewOnce?: boolean;
   viewOnceViewed?: boolean;
   reactions?: Record<string, string>;
+  edited?: boolean;
   createdAt: Date | null;
 };
 
@@ -56,6 +57,7 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     delivered: (data.delivered as boolean) ?? false,
     viewOnce: (data.viewOnce as boolean) ?? false,
     viewOnceViewed: (data.viewOnceViewed as boolean) ?? false,
+    edited: (data.edited as boolean) ?? false,
     reactions: Object.fromEntries(
       Object.entries((data.reactions as Record<string, string>) ?? {}).filter(
         ([, v]) => v && typeof v === "string" && v.length > 0
@@ -81,9 +83,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     );
     const unsub = onSnapshot(q, (snap) => {
       const docs = snap.docs;
-      if (docs.length > 0) {
-        oldestDocRef.current = docs[docs.length - 1];
-      }
+      if (docs.length > 0) oldestDocRef.current = docs[docs.length - 1];
       setMessages(docs.map(mapDoc).reverse());
       setLoading(false);
       setHasMore(docs.length === PAGE_SIZE);
@@ -135,6 +135,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
         delivered: true,
         viewOnce: payload.viewOnce ?? false,
         viewOnceViewed: false,
+        edited: false,
         reactions: {},
         createdAt: serverTimestamp(),
       });
@@ -142,7 +143,15 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     [roomId, currentUserId]
   );
 
-  // Delete for me: hides message only for current user
+  const editMessage = useCallback(
+    async (messageId: string, newText: string) => {
+      if (!currentUserId || !newText.trim()) return;
+      const r = doc(db, "rooms", roomId, "messages", messageId);
+      await updateDoc(r, { text: newText.trim(), edited: true });
+    },
+    [roomId, currentUserId]
+  );
+
   const deleteForMe = useCallback(
     async (messageId: string) => {
       if (!currentUserId) return;
@@ -152,7 +161,6 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     [roomId, currentUserId]
   );
 
-  // Delete for everyone: marks as globally deleted with configurable text
   const deleteForEveryone = useCallback(
     async (messageId: string, deletedText = "This message was deleted") => {
       const r = doc(db, "rooms", roomId, "messages", messageId);
@@ -166,14 +174,12 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     [roomId]
   );
 
-  // Legacy single delete (kept for compatibility)
   const deleteMessage = deleteForEveryone;
 
   const markSeen = useCallback(
     async (messageId: string) => {
       if (!currentUserId) return;
-      const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { seen: true });
+      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), { seen: true });
     },
     [roomId, currentUserId]
   );
@@ -181,27 +187,28 @@ export function useMessages(roomId: string, currentUserId: string | null) {
   const addReaction = useCallback(
     async (messageId: string, emoji: string) => {
       if (!currentUserId) return;
-      const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { [`reactions.${currentUserId}`]: emoji });
+      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), {
+        [`reactions.${currentUserId}`]: emoji,
+      });
     },
     [roomId, currentUserId]
   );
 
-  // Use deleteField() to fully remove the key — prevents null/undefined display
   const removeReaction = useCallback(
     async (messageId: string) => {
       if (!currentUserId) return;
-      const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { [`reactions.${currentUserId}`]: deleteField() });
+      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), {
+        [`reactions.${currentUserId}`]: deleteField(),
+      });
     },
     [roomId, currentUserId]
   );
 
-  // Mark view-once as viewed — message stays but media is locked
   const markViewOnceViewed = useCallback(
     async (messageId: string) => {
-      const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { viewOnceViewed: true });
+      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), {
+        viewOnceViewed: true,
+      });
     },
     [roomId]
   );
@@ -228,6 +235,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     hasMore,
     loadMore,
     sendMessage,
+    editMessage,
     deleteMessage,
     deleteForMe,
     deleteForEveryone,

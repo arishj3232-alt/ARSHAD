@@ -6,13 +6,13 @@ import {
   collection,
   getDocs,
 } from "firebase/firestore";
-import { ref, set, onDisconnect, onValue } from "firebase/database";
+import { ref, set, onDisconnect, onValue, get } from "firebase/database";
 import { db, rtdb } from "@/lib/firebase";
 
-const ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
+const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
 const MAX_USERS = 2;
-const STALE_MS = 5 * 60 * 1000; // 5 minutes
-const HEARTBEAT_MS = 30 * 1000; // 30 seconds
+const STALE_MS = 5 * 60 * 1000;
+const HEARTBEAT_MS = 30 * 1000;
 
 export type SessionUser = {
   id: string;
@@ -36,12 +36,24 @@ function generateUserId(): string {
   return id;
 }
 
+async function getAdminRoomCode(): Promise<string> {
+  try {
+    const snap = await get(ref(rtdb, "admin/settings/roomCode"));
+    const code = snap.val() as string | null;
+    return code?.trim() || ENV_ROOM_CODE;
+  } catch {
+    return ENV_ROOM_CODE;
+  }
+}
+
 export function useSession() {
   const [state, setState] = useState<SessionState>({ status: "idle" });
   const [codeError, setCodeError] = useState("");
 
   const joinRoom = useCallback(async (code: string, name: string) => {
-    if (code.trim() !== ROOM_CODE.trim()) {
+    // Check against admin-controlled room code (falls back to env var)
+    const validCode = await getAdminRoomCode();
+    if (code.trim() !== validCode.trim()) {
       setCodeError("Wrong room code. This space is only for two.");
       return;
     }
@@ -57,7 +69,6 @@ export function useSession() {
       const presenceSnap = await getDocs(presenceCol);
       const now = Date.now();
 
-      // Only count OTHER users who have been active within the stale threshold
       const activeOtherIds = presenceSnap.docs
         .filter((d) => {
           if (d.id === userId) return false;
@@ -72,7 +83,6 @@ export function useSession() {
         return;
       }
 
-      // Write this user's presence to Firestore (with numeric timestamp)
       const userRef = doc(db, "rooms", "main", "presence", userId);
       await setDoc(userRef, {
         id: userId,
@@ -81,13 +91,11 @@ export function useSession() {
         lastSeenTs: now,
       });
 
-      // Register beforeunload cleanup
       const cleanupFirestore = () => {
         deleteDoc(doc(db, "rooms", "main", "presence", userId)).catch(() => {});
       };
       window.addEventListener("beforeunload", cleanupFirestore);
 
-      // Heartbeat — update lastSeenTs every 30s to keep presence fresh
       const heartbeat = setInterval(() => {
         setDoc(doc(db, "rooms", "main", "presence", userId), {
           id: userId,
@@ -97,128 +105,99 @@ export function useSession() {
         }).catch(() => {});
       }, HEARTBEAT_MS);
 
-      // Cleanup heartbeat on page unload
       window.addEventListener("beforeunload", () => clearInterval(heartbeat));
 
-      // RTDB presence — fire-and-forget
-      try {
-        const rtPresenceRef = ref(rtdb, `presence/${userId}`);
-        await set(rtPresenceRef, {
-          online: true,
-          name: name.trim(),
-          lastSeen: now,
-        });
-        onDisconnect(rtPresenceRef).update({
-          online: false,
-          lastSeen: Date.now(),
-        });
-      } catch {
-        // RTDB unavailable
-      }
-
-      const sessUser: SessionUser = {
-        id: userId,
-        name: name.trim(),
-        joinedAt: new Date(),
-        online: true,
-        lastSeen: new Date(),
-      };
+      // RTDB presence with onDisconnect cleanup
+      const rtdbRef = ref(rtdb, `status/${userId}`);
+      await set(rtdbRef, { status: "online", ts: Date.now() }).catch(() => {});
+      onDisconnect(rtdbRef).set({ status: "offline", ts: Date.now() }).catch(() => {});
 
       setState({
         status: "active",
-        user: sessUser,
-        otherId: activeOtherIds[0] ?? null,
+        user: {
+          id: userId,
+          name: name.trim(),
+          joinedAt: new Date(),
+          online: true,
+          lastSeen: null,
+        },
+        otherId: null,
       });
     } catch (err) {
-      console.error("Failed to join room:", err);
-      setCodeError("Could not connect. Check your internet and try again.");
       setState({ status: "idle" });
+      setCodeError("Connection failed. Please try again.");
     }
   }, []);
 
-  return {
-    state,
-    setState,
-    codeError,
-    setCodeError,
-    joinRoom,
-  };
+  const leaveRoom = useCallback(() => {
+    if (state.status !== "active") return;
+    deleteDoc(doc(db, "rooms", "main", "presence", state.user.id)).catch(() => {});
+    localStorage.removeItem("onlytwo-user-id");
+    setState({ status: "idle" });
+  }, [state]);
+
+  return { state, codeError, joinRoom, leaveRoom };
 }
 
-export function usePresence(userId: string | null) {
-  const [users, setUsers] = useState<Record<string, SessionUser>>({});
+export function usePresence(currentUserId: string | null) {
+  const [presence, setPresence] = useState<Record<string, SessionUser>>({});
 
   useEffect(() => {
-    if (!userId) return;
-    try {
-      const presenceRef = ref(rtdb, "presence");
-      const unsub = onValue(
-        presenceRef,
-        (snapshot) => {
-          const data = snapshot.val() ?? {};
-          const mapped: Record<string, SessionUser> = {};
-          for (const [id, val] of Object.entries(
-            data as Record<
-              string,
-              { name: string; online: boolean; lastSeen: number }
-            >
-          )) {
-            mapped[id] = {
-              id,
-              name: val.name,
-              online: val.online,
-              lastSeen: val.lastSeen ? new Date(val.lastSeen) : null,
-              joinedAt: null,
-            };
-          }
-          setUsers(mapped);
-        },
-        (err) => {
-          console.warn("RTDB presence unavailable:", err.message);
-        }
-      );
-      return () => unsub();
-    } catch {
-      // RTDB not available
-    }
-  }, [userId]);
+    const presenceCol = collection(db, "rooms", "main", "presence");
+    const unsub = onSnapshot(presenceCol, (snap) => {
+      const users: Record<string, SessionUser> = {};
+      const now = Date.now();
+      snap.docs.forEach((d) => {
+        const data = d.data();
+        const ts: number = data.lastSeenTs ?? 0;
+        const isStale = now - ts > STALE_MS;
+        users[d.id] = {
+          id: d.id,
+          name: data.name as string,
+          joinedAt: null,
+          online: !isStale && (data.online as boolean),
+          lastSeen: ts ? new Date(ts) : null,
+        };
+      });
+      setPresence(users);
+    });
+    return () => unsub();
+  }, []);
 
-  return users;
+  return presence;
 }
+
+import { onSnapshot } from "firebase/firestore";
 
 export function useTypingIndicator(roomId: string, userId: string | null) {
   const [isOtherTyping, setIsOtherTyping] = useState(false);
 
   const setTyping = useCallback(
-    async (typing: boolean) => {
+    (typing: boolean) => {
       if (!userId) return;
       try {
-        const r = ref(rtdb, `typing/${roomId}/${userId}`);
-        await set(r, typing ? { typing: true, ts: Date.now() } : null);
-      } catch {
-        // RTDB unavailable
-      }
+        set(ref(rtdb, `typing/${roomId}/${userId}`), typing ? true : null).catch(() => {});
+      } catch {}
     },
     [roomId, userId]
   );
 
   useEffect(() => {
-    if (!userId) return;
+    if (!roomId) return;
     try {
-      const r = ref(rtdb, `typing/${roomId}`);
       const unsub = onValue(
-        r,
+        ref(rtdb, `typing/${roomId}`),
         (snap) => {
-          const data = snap.val() ?? {};
-          const others = Object.keys(data).filter((id) => id !== userId);
+          const data = snap.val() as Record<string, boolean> | null;
+          if (!data || !userId) { setIsOtherTyping(false); return; }
+          const others = Object.entries(data)
+            .filter(([uid, val]) => uid !== userId && val === true);
           setIsOtherTyping(others.length > 0);
         },
         () => {}
       );
       return () => unsub();
-    } catch {
-      // RTDB unavailable
-    }
+    } catch {}
   }, [roomId, userId]);
 
   return { isOtherTyping, setTyping };

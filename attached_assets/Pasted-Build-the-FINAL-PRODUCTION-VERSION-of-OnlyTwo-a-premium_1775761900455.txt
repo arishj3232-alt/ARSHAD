@@ -1,0 +1,356 @@
+Build the FINAL PRODUCTION VERSION of OnlyTwo — a premium, real-time, two-person chat application.
+
+DO NOT break existing features.
+Extend cleanly.
+Ensure production-level UI/UX + real-time behavior + admin control.
+
+==================================================
+🔥 CORE GOAL
+============
+
+Make OnlyTwo feel like:
+
+• WhatsApp + Instagram level UX
+• Real mobile app feel
+• Smooth, fast, premium SaaS product
+
+==================================================
+💠 1. CYAN PREMIUM SYSTEM (*️⃣ KEYWORD)
+=======================================
+
+Trigger:
+If message contains "*️⃣"
+
+Apply CYAN glow ONLY for:
+
+• Deleted for everyone messages
+• One-time view locked messages
+
+STYLE:
+
+border: 1px solid cyan
+box-shadow: 0 0 12px rgba(0,255,255,0.6)
+background: rgba(0,255,255,0.05)
+
+STRICT RULE:
+
+• DO NOT apply to normal messages
+• Only apply when BOTH:
+
+* special message (deleted/view-once)
+* contains "*️⃣"
+
+==================================================
+🗑️ 2. DELETE SYSTEM (WHATSAPP LEVEL)
+=====================================
+
+Implement:
+
+• Delete for me
+• Delete for everyone
+
+LOGIC:
+
+deleteForMe:
+→ hidden only for current user
+
+deleteForEveryone:
+→ replaced globally with:
+settings.deletedForEveryoneText
+
+Ensure:
+
+• sync in real-time
+• no "null" bugs
+• clean UI replacement
+
+==================================================
+👁️ 3. VIEW-ONCE SYSTEM (WHATSAPP STYLE)
+========================================
+
+Behavior:
+
+• Tap → open fullscreen
+• NO timer
+• On exit → permanently locked
+
+Replace with:
+
+settings.viewOnceLimitText
+
+If "*️⃣" present:
+→ apply CYAN glow
+
+Add:
+
+• 🔒 lock icon
+• blur preview before open
+• smooth fullscreen animation
+
+==================================================
+🔐 4. ADMIN PANEL (FULL CONTROL SYSTEM)
+=======================================
+
+Admin access:
+
+• Desktop: CTRL + SHIFT + S
+• Mobile: type adminKeyword (dynamic)
+
+DO NOT send keyword message.
+
+Admin can control:
+
+{
+adminKeyword
+deletedForEveryoneText
+viewOnceLimitText
+roomCode
+reactionEmojis[]
+fastReactionEmoji
+replyMode ("tap" | "swipe" | "both")
+notificationsEnabled
+}
+
+All changes:
+
+• sync in real-time
+• affect both users instantly
+
+==================================================
+🏠 5. ROOM CODE SYSTEM (DYNAMIC)
+================================
+
+Admin can change:
+
+roomCode
+
+Behavior:
+
+• new users must enter updated code
+• existing session NOT affected
+
+==================================================
+💬 6. MESSAGE SYSTEM (ADVANCED)
+===============================
+
+Add:
+
+• Edit message
+• Reply (tap + swipe based on admin setting)
+• Reactions (no null bugs)
+
+Fix reaction bug:
+
+• use deleteField()
+• NEVER show null / null2
+
+Add:
+
+• Double tap → fast reaction (admin controlled)
+
+==================================================
+❤️ 7. REACTION SYSTEM (ADMIN CONTROLLED)
+========================================
+
+Admin can:
+
+• Add/remove emojis
+• Set fast reaction emoji
+
+UI:
+
+• reactions BELOW message
+• grouped cleanly
+• animated (scale + fade)
+
+==================================================
+📸 8. MEDIA SYSTEM
+==================
+
+Support:
+
+• image / video / audio
+• Cloudinary upload
+
+Add:
+
+• Video note (circle like WhatsApp)
+• Voice message waveform
+
+==================================================
+🔗 9. SMART LINK PREVIEW
+========================
+
+Auto detect links:
+
+• YouTube → thumbnail + play button
+• Spotify → green card
+• Instagram → pink card
+
+All links:
+
+• open in new tab
+• allow app redirect (mobile)
+
+==================================================
+🧠 10. USER STATUS SYSTEM
+=========================
+
+Real-time states:
+
+🟢 online
+🔴 offline / last seen
+🟡 viewing media
+🔵 recording
+⚪ browsing
+
+Fix bugs:
+
+• typing stuck issue (debounce 1.5s)
+• offline showing as typing → fix logic
+
+==================================================
+📱 11. MOBILE UI (CRITICAL)
+===========================
+
+Fix ALL layout issues:
+
+• use height: 100dvh
+• padding-bottom: env(safe-area-inset-bottom)
+
+Ensure:
+
+• input box NEVER hidden
+• no overlap with nav buttons
+• smooth scrolling
+
+Disable:
+
+• cursor presence on mobile
+
+==================================================
+💎 12. UI / UX (REAL APP FEEL)
+==============================
+
+Message bubbles:
+
+• 20px radius
+• glassmorphism
+• smooth transitions
+• scale on tap
+
+Chat:
+
+• smooth scroll
+• fade-in animation
+
+Remove:
+
+• unnecessary icons (admin icon)
+
+==================================================
+🐛 13. REMOVE ALL NULL BUGS
+===========================
+
+Global rule:
+
+if (!value || value === "null") return null
+
+Fix:
+
+• reactions
+• deleted messages
+• reply preview
+
+==================================================
+🔔 14. REAL PUSH NOTIFICATIONS (FCM)
+====================================
+
+IMPLEMENT FULLY:
+
+• Firebase Cloud Messaging
+• Service Worker REQUIRED
+
+Features:
+
+✔ Works when app closed
+✔ Works on mobile + desktop
+
+Format:
+
+TEXT → "hello"
+IMAGE → "📸 Photo"
+VIDEO → "🎥 Video"
+AUDIO → "🎤 Voice message"
+CALL → "📞 Incoming call"
+
+Smart rules:
+
+• DO NOT notify if user active
+• ONLY notify when tab hidden
+
+Foreground:
+→ show in-app toast
+
+==================================================
+⚙️ 15. SERVICE WORKER
+=====================
+
+Create:
+
+/public/firebase-messaging-sw.js
+
+Handle:
+
+• background notifications
+• click → open app
+
+==================================================
+🎨 16. COLOR SYSTEM (STATUS + UX)
+=================================
+
+Use:
+
+🟢 green → online
+🔴 red → offline
+🟡 gold → viewing
+🔵 blue → recording
+⚪ white → browsing
+
+==================================================
+📡 17. DEVICE TRACKING
+======================
+
+Admin can see:
+
+• logged-in devices
+• sessions via RTDB
+
+==================================================
+🧑‍💼 18. PROFILE SYSTEM
+========================
+
+• Upload DP (Cloudinary)
+• Prevent duplicate image (hash check)
+
+==================================================
+⚡ FINAL RESULT
+==============
+
+OnlyTwo becomes:
+
+✔ Real-time
+✔ Mobile perfect
+✔ WhatsApp-level UX
+✔ Fully customizable
+✔ Admin-controlled system
+✔ Premium cyan system
+✔ Background notifications
+
+NO glitches
+NO null bugs
+NO UI breaks
+
+Everything must feel:
+
+"Like a real product — not a project"

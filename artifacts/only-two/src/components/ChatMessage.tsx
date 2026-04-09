@@ -1,5 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Trash2, Reply, CheckCheck, Check, Play, Pause, Eye, EyeOff, X } from "lucide-react";
+import {
+  Trash2,
+  Reply,
+  CheckCheck,
+  Check,
+  Play,
+  Pause,
+  Eye,
+  EyeOff,
+  X,
+  Pencil,
+  Lock,
+} from "lucide-react";
 import { cn, formatTime } from "@/lib/utils";
 import type { Message } from "@/hooks/useMessages";
 import TextWithLinks from "@/components/LinkPreview";
@@ -11,6 +23,7 @@ type Props = {
   onDelete: (id: string) => void;
   onDeleteForMe: (id: string) => void;
   onDeleteForEveryone: (id: string) => void;
+  onEdit: (msg: Message) => void;
   onReply: (msg: Message) => void;
   onReact: (id: string, emoji: string) => void;
   onScrollTo?: (id: string) => void;
@@ -26,6 +39,9 @@ type Props = {
   dpUrl?: string | null;
 };
 
+/* Waveform bars used in audio player */
+const WAVEFORM = [4,7,12,18,22,28,24,16,10,20,30,26,14,8,22,18,12,6,16,24];
+
 function AudioPlayer({ url }: { url: string }) {
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -34,15 +50,14 @@ function AudioPlayer({ url }: { url: string }) {
 
   const toggle = () => {
     if (!audioRef.current) return;
-    if (playing) audioRef.current.pause();
-    else audioRef.current.play();
-    setPlaying(!playing);
+    if (playing) { audioRef.current.pause(); setPlaying(false); }
+    else { audioRef.current.play(); setPlaying(true); }
   };
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!audioRef.current || !duration) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const ratio = (e.clientX - rect.left) / rect.width;
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     audioRef.current.currentTime = ratio * duration;
   };
 
@@ -60,17 +75,31 @@ function AudioPlayer({ url }: { url: string }) {
       />
       <button
         onClick={toggle}
-        className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center hover:bg-white/30 transition-colors flex-shrink-0 active:scale-95"
+        className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center hover:bg-white/30 transition flex-shrink-0 active:scale-95"
       >
         {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
       </button>
       <div className="flex-1">
-        <div className="relative h-1.5 bg-white/20 rounded-full cursor-pointer" onClick={handleSeek}>
-          <div className="absolute left-0 top-0 h-full bg-white/70 rounded-full transition-all" style={{ width: `${progress}%` }} />
+        <div
+          className="relative h-8 flex items-end gap-0.5 cursor-pointer"
+          onClick={handleSeek}
+        >
+          {WAVEFORM.map((h, i) => {
+            const pct = ((i + 1) / WAVEFORM.length) * 100;
+            return (
+              <div
+                key={i}
+                className="flex-1 rounded-full transition-all duration-75"
+                style={{
+                  height: `${h}px`,
+                  background: pct <= progress ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.2)",
+                }}
+              />
+            );
+          })}
         </div>
-        <div className="text-[10px] text-white/40 mt-1 flex justify-between">
-          <span>{playing ? `${Math.floor((progress / 100) * duration)}s` : "Voice"}</span>
-          {duration ? <span>{Math.floor(duration)}s</span> : null}
+        <div className="text-[10px] text-white/40 mt-0.5">
+          {duration ? `${Math.floor(duration)}s` : "Voice message"}
         </div>
       </div>
     </div>
@@ -94,12 +123,13 @@ function FullscreenViewer({
 
   return (
     <div
-      className="fixed inset-0 z-[200] bg-black flex items-center justify-center"
+      className="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center"
+      style={{ animation: "fadeIn 0.2s ease-out" }}
       onClick={onClose}
     >
       <button
         onClick={onClose}
-        className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition text-white"
+        className="absolute top-4 right-4 z-10 p-2.5 rounded-full bg-white/10 hover:bg-white/20 transition text-white"
       >
         <X className="w-5 h-5" />
       </button>
@@ -107,7 +137,8 @@ function FullscreenViewer({
         <img
           src={url}
           alt="View once"
-          className="max-w-full max-h-full object-contain"
+          className="max-w-full max-h-full object-contain rounded-xl"
+          style={{ animation: "scaleIn 0.2s ease-out" }}
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
@@ -116,7 +147,7 @@ function FullscreenViewer({
           autoPlay
           controls
           playsInline
-          className="max-w-full max-h-full"
+          className="max-w-full max-h-full rounded-xl"
           onClick={(e) => e.stopPropagation()}
         />
       )}
@@ -136,6 +167,7 @@ function ViewOnceMedia({
   limitText: string;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
+  const hasStar = limitText.includes("*️⃣");
 
   const handleView = () => {
     if (isOwn || message.viewOnceViewed) return;
@@ -149,10 +181,15 @@ function ViewOnceMedia({
 
   if (message.viewOnceViewed) {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-xl px-4 py-5 min-w-[180px] bg-cyan-500/5 border border-cyan-500/20">
+      <div className={cn(
+        "flex items-center justify-center gap-2 rounded-xl px-4 py-6 min-w-[180px]",
+        hasStar
+          ? "border border-cyan-400/40 bg-cyan-500/5 shadow-[0_0_12px_rgba(0,255,255,0.15)]"
+          : "border border-white/10 bg-white/5"
+      )}>
         <div className="text-center">
-          <EyeOff className="w-5 h-5 mx-auto mb-1 text-cyan-400/60" />
-          <p className="text-xs text-cyan-300/60">{limitText}</p>
+          <Lock className={cn("w-5 h-5 mx-auto mb-1.5", hasStar ? "text-cyan-400/70" : "text-white/30")} />
+          <p className={cn("text-xs", hasStar ? "text-cyan-300/70" : "text-white/30")}>{limitText}</p>
         </div>
       </div>
     );
@@ -170,24 +207,33 @@ function ViewOnceMedia({
       <button
         onClick={handleView}
         className={cn(
-          "flex items-center justify-center gap-2 rounded-xl px-4 py-6 w-full min-w-[180px]",
-          isOwn
-            ? "bg-white/10 text-white/70"
-            : "bg-white/5 border border-white/10 text-white/60"
+          "flex items-center justify-center gap-2 rounded-xl w-full min-w-[180px] overflow-hidden relative",
+          isOwn ? "bg-white/10" : "bg-black border border-white/10"
         )}
+        style={{ height: 140 }}
       >
-        <div className="text-center">
+        {/* Blur preview */}
+        {message.mediaUrl && message.type === "image" && !isOwn && (
+          <img
+            src={message.mediaUrl}
+            alt="view once"
+            className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40"
+          />
+        )}
+        <div className="relative z-10 text-center">
           {isOwn ? (
             <>
-              <EyeOff className="w-6 h-6 mx-auto mb-1 opacity-60" />
-              <p className="text-xs">View once</p>
-              <p className="text-[10px] opacity-50 mt-0.5">Awaiting view</p>
+              <EyeOff className="w-6 h-6 mx-auto mb-1 opacity-50" />
+              <p className="text-xs text-white/60">View once</p>
+              <p className="text-[10px] opacity-40 mt-0.5">Awaiting view</p>
             </>
           ) : (
             <>
-              <Eye className="w-7 h-7 mx-auto mb-2" />
-              <p className="text-sm font-medium">Tap to view</p>
-              <p className="text-[10px] opacity-50 mt-0.5">
+              <div className="w-14 h-14 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center mb-2 mx-auto">
+                <Eye className="w-6 h-6 text-white" />
+              </div>
+              <p className="text-sm font-semibold text-white">Tap to view</p>
+              <p className="text-[10px] text-white/40 mt-0.5">
                 {message.type === "video" ? "Video" : "Photo"} · View once
               </p>
             </>
@@ -205,6 +251,7 @@ export default function ChatMessage({
   onDelete,
   onDeleteForMe,
   onDeleteForEveryone,
+  onEdit,
   onReply,
   onReact,
   onScrollTo,
@@ -224,7 +271,6 @@ export default function ChatMessage({
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
-  const swipedRef = useRef(false);
   const lastTapRef = useRef(0);
 
   const myReaction = message.reactions?.[currentUserId];
@@ -237,32 +283,28 @@ export default function ChatMessage({
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
     touchStartY.current = e.touches[0].clientY;
-    swipedRef.current = false;
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
     const dx = e.changedTouches[0].clientX - touchStartX.current;
     const dy = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
 
-    // Double tap detection
     const now = Date.now();
     const timeDiff = now - lastTapRef.current;
     if (timeDiff < 300 && timeDiff > 0 && Math.abs(dx) < 10 && dy < 10) {
       if (reactionsEnabled && !message.deleted) {
-        onReact(message.id, myReaction === fastReactionEmoji ? "" : fastReactionEmoji);
+        const current = myReaction;
+        if (current === fastReactionEmoji) onReact(message.id, "");
+        else onReact(message.id, fastReactionEmoji);
       }
       lastTapRef.current = 0;
       return;
     }
     lastTapRef.current = now;
 
-    // Swipe to reply
     if (!repliesEnabled || message.deleted) return;
     const canSwipe = replyMode === "swipe" || replyMode === "both";
-    if (canSwipe && dx > 55 && dy < 40 && !swipedRef.current) {
-      swipedRef.current = true;
-      onReply(message);
-    }
+    if (canSwipe && dx > 55 && dy < 40) onReply(message);
   };
 
   const handleReact = (emoji: string) => {
@@ -274,34 +316,32 @@ export default function ChatMessage({
 
   const handleDoubleClick = () => {
     if (reactionsEnabled && !message.deleted) {
-      onReact(message.id, myReaction === fastReactionEmoji ? "" : fastReactionEmoji);
+      const current = myReaction;
+      onReact(message.id, current === fastReactionEmoji ? "" : fastReactionEmoji);
     }
   };
 
-  // Deleted for me (current user only)
   const isDeletedForMe = !!(currentUserId && message.deletedFor?.[currentUserId]);
 
-  // Deleted for everyone
+  // --- DELETED FOR EVERYONE ---
   if (message.deleted || message.deletedForEveryone) {
-    const isCyan = message.deletedForEveryone;
+    const displayText = message.text || deletedForEveryoneText;
+    const hasStar = displayText.includes("*️⃣");
     return (
       <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
         <div className={cn(
-          "px-4 py-2 rounded-2xl text-xs italic max-w-xs",
-          isCyan
-            ? "bg-cyan-500/5 border border-cyan-500/30 text-cyan-300/50 shadow-sm shadow-cyan-500/10"
+          "px-4 py-2 rounded-2xl text-xs italic max-w-xs transition-all",
+          hasStar
+            ? "border border-cyan-400/50 bg-cyan-500/5 text-cyan-300/60 shadow-[0_0_12px_rgba(0,255,255,0.2)]"
             : "bg-white/5 border border-white/5 text-white/25"
         )}>
-          {message.text || deletedForEveryoneText}
+          {displayText}
         </div>
       </div>
     );
   }
 
-  // Hidden for me
-  if (isDeletedForMe) {
-    return null;
-  }
+  if (isDeletedForMe) return null;
 
   return (
     <div
@@ -319,11 +359,13 @@ export default function ChatMessage({
       {/* Other user avatar */}
       {!isOwn && dpUrl && (
         <div className="flex-shrink-0 mr-1.5 mb-1 self-end">
-          <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover" />
+          <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10" />
         </div>
       )}
 
       <div className={cn("flex items-end gap-2 max-w-[80%] sm:max-w-[75%]", isOwn && "flex-row-reverse")}>
+
+        {/* Action buttons — appear on hover */}
         {showActions && (
           <div className={cn(
             "flex flex-col items-center gap-1 mb-1 transition-all duration-150",
@@ -333,14 +375,14 @@ export default function ChatMessage({
               <div className="relative">
                 <button
                   onClick={() => setShowPicker((p) => !p)}
-                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-white/50 hover:text-white/80 transition-all text-sm leading-none"
+                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-sm leading-none transition-all hover:scale-110"
                   title="React"
                 >
                   {myReaction || "❤️"}
                 </button>
                 {showPicker && (
                   <div className={cn(
-                    "absolute bottom-8 flex items-center gap-1 bg-[#1a1a2e] border border-white/10 rounded-2xl px-2 py-1.5 shadow-xl z-20",
+                    "absolute bottom-8 flex items-center gap-1 bg-[#1a1a2e] border border-white/10 rounded-2xl px-2.5 py-2 shadow-2xl z-20",
                     isOwn ? "right-0" : "left-0"
                   )}>
                     {reactionEmojis.map((emoji) => (
@@ -348,7 +390,7 @@ export default function ChatMessage({
                         key={emoji}
                         onClick={() => handleReact(emoji)}
                         className={cn(
-                          "text-lg hover:scale-125 transition-transform active:scale-110 p-0.5 rounded-lg",
+                          "text-xl hover:scale-125 transition-transform active:scale-110 p-0.5 rounded-lg",
                           myReaction === emoji && "bg-white/10"
                         )}
                       >
@@ -368,6 +410,15 @@ export default function ChatMessage({
                 <Reply className="w-3.5 h-3.5" />
               </button>
             )}
+            {isOwn && message.type === "text" && !message.deleted && (
+              <button
+                onClick={() => onEdit(message)}
+                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-violet-400 transition-all"
+                title="Edit"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
             {isOwn && (
               <div className="relative">
                 <button
@@ -379,19 +430,19 @@ export default function ChatMessage({
                 </button>
                 {showDeleteMenu && (
                   <div className={cn(
-                    "absolute bottom-8 bg-[#1a1a2e] border border-white/10 rounded-2xl overflow-hidden shadow-xl z-20 w-44",
+                    "absolute bottom-8 bg-[#1a1a2e] border border-white/10 rounded-2xl overflow-hidden shadow-xl z-20 w-48",
                     isOwn ? "right-0" : "left-0"
                   )}>
                     <button
                       onClick={() => { onDeleteForMe(message.id); setShowDeleteMenu(false); setShowActions(false); }}
-                      className="flex items-center gap-2 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm text-left"
+                      className="flex items-center gap-2.5 w-full px-4 py-3 hover:bg-white/5 text-white/60 hover:text-white transition text-sm text-left"
                     >
-                      <Trash2 className="w-3.5 h-3.5 text-white/40" />
+                      <Trash2 className="w-3.5 h-3.5 text-white/30" />
                       Delete for me
                     </button>
                     <button
                       onClick={() => { onDeleteForEveryone(message.id); setShowDeleteMenu(false); setShowActions(false); }}
-                      className="flex items-center gap-2 w-full px-4 py-3 hover:bg-rose-500/10 text-rose-400/80 hover:text-rose-400 transition text-sm text-left"
+                      className="flex items-center gap-2.5 w-full px-4 py-3 hover:bg-rose-500/10 text-rose-400/70 hover:text-rose-400 transition text-sm text-left border-t border-white/5"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                       Delete for everyone
@@ -406,19 +457,22 @@ export default function ChatMessage({
         <div className="flex flex-col gap-1">
           <div
             className={cn(
-              "relative rounded-2xl overflow-visible",
-              message.viewOnce && message.viewOnceViewed
-                ? "bg-cyan-500/5 border border-cyan-500/20 shadow-sm shadow-cyan-500/10"
+              "relative rounded-[20px] overflow-visible",
+              message.viewOnce && message.viewOnceViewed && viewOnceLimitText.includes("*️⃣")
+                ? "border border-cyan-400/40 bg-cyan-500/5 shadow-[0_0_12px_rgba(0,255,255,0.15)]"
                 : isOwn
                 ? "bg-gradient-to-br from-pink-500 to-violet-600 text-white rounded-br-sm shadow-lg shadow-pink-500/20"
                 : "bg-white/8 backdrop-blur-sm border border-white/10 text-white rounded-bl-sm"
             )}
+            style={{
+              animation: "msgFadeIn 0.2s ease-out",
+            }}
           >
             {message.replyToId && (
               <button
                 onClick={() => onScrollTo?.(message.replyToId!)}
                 className={cn(
-                  "block w-full text-left px-3 pt-2 pb-1 border-l-2 text-xs opacity-70 rounded-t-2xl",
+                  "block w-full text-left px-3 pt-2.5 pb-1.5 border-l-2 text-xs opacity-70 rounded-t-[20px]",
                   isOwn ? "border-white/50 bg-black/10" : "border-pink-500/60 bg-white/5"
                 )}
               >
@@ -450,7 +504,12 @@ export default function ChatMessage({
                     </a>
                   )}
                   {message.type === "video" && message.mediaUrl && (
-                    <video src={message.mediaUrl} controls className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+                    <video
+                      src={message.mediaUrl}
+                      controls
+                      className="max-w-[260px] max-h-[300px] rounded-xl"
+                      playsInline
+                    />
                   )}
                 </>
               )}
@@ -458,7 +517,10 @@ export default function ChatMessage({
                 <AudioPlayer url={message.mediaUrl} />
               )}
 
-              <div className={cn("flex items-center gap-1 mt-1", isOwn ? "justify-end" : "justify-start")}>
+              <div className={cn("flex items-center gap-1.5 mt-1", isOwn ? "justify-end" : "justify-start")}>
+                {message.edited && (
+                  <span className="text-[9px] opacity-35 italic">edited</span>
+                )}
                 <span className="text-[10px] opacity-40">{formatTime(message.createdAt)}</span>
                 {isOwn && (
                   <span className="opacity-50">
@@ -475,6 +537,7 @@ export default function ChatMessage({
             </div>
           </div>
 
+          {/* Reactions */}
           {Object.keys(reactionCounts).length > 0 && (
             <div className={cn("flex flex-wrap gap-1", isOwn ? "justify-end" : "justify-start")}>
               {Object.entries(reactionCounts).map(([emoji, count]) => (
@@ -482,11 +545,12 @@ export default function ChatMessage({
                   key={emoji}
                   onClick={() => reactionsEnabled && handleReact(emoji)}
                   className={cn(
-                    "flex items-center gap-0.5 px-2 py-0.5 rounded-full text-sm border transition-all",
+                    "flex items-center gap-0.5 px-2 py-0.5 rounded-full text-sm border transition-all active:scale-95",
                     myReaction === emoji
                       ? "bg-pink-500/20 border-pink-500/40"
                       : "bg-white/5 border-white/10 hover:bg-white/10"
                   )}
+                  style={{ animation: "reactionPop 0.15s ease-out" }}
                 >
                   <span>{emoji}</span>
                   {count > 1 && <span className="text-[10px] text-white/50">{count}</span>}
@@ -496,6 +560,25 @@ export default function ChatMessage({
           )}
         </div>
       </div>
+
+      <style>{`
+        @keyframes msgFadeIn {
+          from { opacity: 0; transform: translateY(6px) scale(0.97); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes scaleIn {
+          from { transform: scale(0.9); opacity: 0; }
+          to { transform: scale(1); opacity: 1; }
+        }
+        @keyframes reactionPop {
+          from { transform: scale(0.7); opacity: 0; }
+          to { transform: scale(1); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }

@@ -3,10 +3,9 @@ import EntryPage from "@/pages/EntryPage";
 import ChatPage from "@/pages/ChatPage";
 
 export default function App() {
-  const { state, joinRoom, codeError, setCodeError } = useSession();
+  const { state, joinRoom, codeError } = useSession();
 
   const handleJoin = async (code: string, name: string) => {
-    setCodeError("");
     await joinRoom(code, name);
   };
 

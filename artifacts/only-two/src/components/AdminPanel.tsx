@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Shield, Smartphone } from "lucide-react";
+import { X, Shield, Smartphone, Lock } from "lucide-react";
 import { ref, onValue } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
@@ -27,7 +27,7 @@ const boolGroups: { title: string; rows: ToggleRow[] }[] = [
     rows: [
       { key: "imageUploadEnabled", label: "Image upload" },
       { key: "videoUploadEnabled", label: "Video upload" },
-      { key: "viewOnceEnabled", label: "View-once photos/videos" },
+      { key: "viewOnceEnabled", label: "View-once" },
       { key: "videoNotesEnabled", label: "Video notes" },
     ],
   },
@@ -143,7 +143,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
           </div>
           <div className="flex-1">
             <h2 className="text-white font-bold text-sm">Admin Panel</h2>
-            <p className="text-white/30 text-xs">Feature controls · Live sync</p>
+            <p className="text-white/30 text-xs">Live sync · Both users affected instantly</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-xl hover:bg-white/10 text-white/40 hover:text-white transition">
             <X className="w-4 h-4" />
@@ -169,6 +169,25 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
 
           {tab === "features" && (
             <>
+              {/* Room Code */}
+              <div>
+                <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Room Code</p>
+                <div className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <Lock className="w-3.5 h-3.5 text-white/30" />
+                    <p className="text-white/40 text-xs">New users must enter this code. Existing sessions stay active.</p>
+                  </div>
+                  <input
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm font-mono focus:outline-none focus:border-pink-500/50 transition tracking-wider"
+                    defaultValue={settings.roomCode}
+                    onBlur={(e) => {
+                      const v = e.target.value.trim();
+                      if (v) onUpdate("roomCode", v);
+                    }}
+                  />
+                </div>
+              </div>
+
               {boolGroups.map((group) => (
                 <div key={group.title}>
                   <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">{group.title}</p>
@@ -190,11 +209,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                 <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Reply Mode</p>
                 <div className="bg-white/3 border border-white/8 rounded-2xl overflow-hidden divide-y divide-white/5">
                   {REPLY_MODES.map((m) => (
-                    <button
-                      key={m.value}
-                      onClick={() => onUpdate("replyMode", m.value)}
-                      className="flex items-center gap-4 px-4 py-3 w-full"
-                    >
+                    <button key={m.value} onClick={() => onUpdate("replyMode", m.value)} className="flex items-center gap-4 px-4 py-3 w-full">
                       <span className="flex-1 text-white/70 text-sm text-left">{m.label}</span>
                       <div className={cn(
                         "w-4 h-4 rounded-full border-2 transition-all",
@@ -208,7 +223,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
               <div>
                 <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Admin Keyword</p>
                 <div className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
-                  <p className="text-white/40 text-xs mb-2">Type this in the message box to open admin panel (mobile trigger)</p>
+                  <p className="text-white/40 text-xs mb-2">Type this in the message box to open admin panel on mobile</p>
                   <input
                     className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-pink-500/50 transition"
                     defaultValue={settings.adminKeyword}
@@ -224,7 +239,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
               <div>
                 <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Active Reaction Emojis</p>
                 <div className="bg-white/3 border border-white/8 rounded-2xl p-4">
-                  <div className="flex flex-wrap gap-2 mb-3 min-h-[2rem]">
+                  <div className="flex flex-wrap gap-2 mb-3 min-h-[2.5rem]">
                     {settings.reactionEmojis.map((e) => (
                       <button
                         key={e}
@@ -251,9 +266,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                           setEmojiInput(next.join(" "));
                         }}
                         className="text-xl hover:scale-110 transition-transform opacity-50 hover:opacity-100"
-                      >
-                        {e}
-                      </button>
+                      >{e}</button>
                     ))}
                   </div>
                   <p className="text-white/30 text-xs mb-1.5">Custom (space-separated):</p>
@@ -264,10 +277,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                       onChange={(e) => setEmojiInput(e.target.value)}
                       placeholder="❤️ 😂 👍"
                     />
-                    <button
-                      onClick={applyEmojis}
-                      className="px-3 py-2 bg-pink-500/20 border border-pink-500/30 text-pink-400 rounded-xl text-sm hover:bg-pink-500/30 transition"
-                    >
+                    <button onClick={applyEmojis} className="px-3 py-2 bg-pink-500/20 border border-pink-500/30 text-pink-400 rounded-xl text-sm hover:bg-pink-500/30 transition">
                       Apply
                     </button>
                   </div>
@@ -277,7 +287,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
               <div>
                 <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Double-Tap Fast Reaction</p>
                 <div className="bg-white/3 border border-white/8 rounded-2xl p-4">
-                  <p className="text-white/40 text-xs mb-3">Double-tap any message to instantly send this emoji:</p>
+                  <p className="text-white/40 text-xs mb-3">Double-tap or double-click a message to instantly react with:</p>
                   <div className="flex flex-wrap gap-2">
                     {settings.reactionEmojis.map((e) => (
                       <button
@@ -289,9 +299,7 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                             ? "bg-pink-500/20 ring-1 ring-pink-500/50 scale-110"
                             : "hover:scale-110 opacity-60 hover:opacity-100"
                         )}
-                      >
-                        {e}
-                      </button>
+                      >{e}</button>
                     ))}
                   </div>
                 </div>
@@ -304,7 +312,8 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
               <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Custom UI Text</p>
               <div className="bg-white/3 border border-white/8 rounded-2xl overflow-hidden divide-y divide-white/5">
                 <div className="px-4 py-3">
-                  <p className="text-white/50 text-xs mb-1.5">Deleted for everyone text</p>
+                  <p className="text-white/50 text-xs mb-0.5">Deleted for everyone text</p>
+                  <p className="text-white/25 text-[10px] mb-1.5">Tip: include *️⃣ to apply cyan glow effect</p>
                   <input
                     className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-pink-500/50 transition"
                     defaultValue={settings.deletedText}
@@ -312,7 +321,8 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                   />
                 </div>
                 <div className="px-4 py-3">
-                  <p className="text-white/50 text-xs mb-1.5">View-once limit reached text</p>
+                  <p className="text-white/50 text-xs mb-0.5">View-once limit reached text</p>
+                  <p className="text-white/25 text-[10px] mb-1.5">Tip: include *️⃣ to apply cyan glow effect</p>
                   <input
                     className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-pink-500/50 transition"
                     defaultValue={settings.viewOnceLimitText}
@@ -320,6 +330,10 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                   />
                 </div>
               </div>
+
+              <p className="text-white/20 text-[10px] px-1 mt-3">
+                The *️⃣ emoji in deleted/view-once text triggers the cyan premium glow effect on those messages.
+              </p>
             </div>
           )}
 

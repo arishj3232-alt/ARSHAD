@@ -1,0 +1,143 @@
+Upgrade OnlyTwo with advanced admin controls, premium cyan system, and dynamic configuration.
+
+DO NOT break existing features.
+Extend current system cleanly.
+
+==================================================
+💠 1. CYAN PREMIUM SYSTEM (*️⃣ KEYWORD)
+=======================================
+
+Trigger:
+If message contains "*️⃣"
+
+Apply CYAN premium style ONLY for:
+
+* "Deleted for everyone" messages
+* One-time view locked messages
+
+STYLE:
+
+* border: 1px solid cyan
+* glow effect:
+  box-shadow: 0 0 12px rgba(0,255,255,0.6)
+* subtle background tint (dark cyan)
+
+Ensure:
+
+* normal messages are NOT affected
+* only special system messages glow
+
+==================================================
+🗑️ 2. CUSTOM DELETED MESSAGE TEXT (ADMIN)
+==========================================
+
+Admin can change:
+
+* deletedForEveryoneText
+  default: "This message was deleted"
+
+UI should always use:
+settings.deletedForEveryoneText
+
+==================================================
+👁️ 3. CUSTOM ONE-TIME VIEW TEXT (ADMIN)
+========================================
+
+Admin can change:
+
+* viewOnceLimitText
+  default: "This image has reached its limit"
+
+After viewing once:
+→ replace message with this text
+
+Apply CYAN glow if "*️⃣" keyword exists
+
+==================================================
+🔐 4. ADMIN KEYWORD SYSTEM (DYNAMIC)
+====================================
+
+Replace hardcoded "laura"
+
+Admin can change:
+
+* adminKeyword
+
+Logic:
+If user types EXACT keyword:
+→ DO NOT send message
+→ Open admin panel
+
+==================================================
+🏠 5. ROOM CODE CONTROL (ADMIN CAN CHANGE)
+==========================================
+
+Admin can change room code dynamically:
+
+* setting: roomCode
+
+When changed:
+
+* both users must use NEW code
+* existing session remains active
+
+Entry page:
+→ validate against updated roomCode
+
+==================================================
+⚙️ 6. ADMIN PANEL SETTINGS (EXPANDED)
+=====================================
+
+Add new fields:
+
+{
+adminKeyword: string
+deletedForEveryoneText: string
+viewOnceLimitText: string
+roomCode: string
+}
+
+All editable live from Admin Panel
+
+==================================================
+🎨 7. CYAN SYSTEM CONDITIONS (STRICT)
+=====================================
+
+Apply cyan glow ONLY IF:
+
+* message is deletedForEveryone OR viewOnce locked
+  AND
+* message contains "*️⃣"
+
+Otherwise:
+→ normal UI
+
+==================================================
+📱 8. MOBILE + DESKTOP CONSISTENCY
+==================================
+
+Ensure:
+
+* cyan glow works on mobile + desktop
+* no overflow issues
+* no layout break
+
+==================================================
+🚀 FINAL RESULT
+===============
+
+Admin can fully control:
+
+✔ Admin panel keyword
+✔ Deleted message text
+✔ One-time view message text
+✔ Room code
+✔ Premium cyan message style
+
+App now feels:
+→ dynamic
+→ customizable
+→ premium-level SaaS
+
+DO NOT skip edge cases.
+Ensure real-time sync for all changes.

@@ -25,6 +25,7 @@ export type AdminSettings = {
   deletedText: string;
   viewOnceLimitText: string;
   adminKeyword: string;
+  roomCode: string;
 };
 
 export const DEFAULT_SETTINGS: AdminSettings = {
@@ -48,6 +49,7 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   deletedText: "This message was deleted",
   viewOnceLimitText: "This image has reached its limit",
   adminKeyword: "laura",
+  roomCode: (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi",
 };
 
 export function useAdmin() {
@@ -55,9 +57,8 @@ export function useAdmin() {
 
   useEffect(() => {
     try {
-      const settingsRef = ref(rtdb, "admin/settings");
       const unsub = onValue(
-        settingsRef,
+        ref(rtdb, "admin/settings"),
         (snap) => {
           const data = snap.val();
           if (data) {
@@ -73,9 +74,7 @@ export function useAdmin() {
         () => {}
       );
       return () => unsub();
-    } catch {
-      // RTDB unavailable
-    }
+    } catch {}
   }, []);
 
   const updateSetting = useCallback(
@@ -84,9 +83,7 @@ export function useAdmin() {
       setSettings(next);
       try {
         await set(ref(rtdb, "admin/settings"), next);
-      } catch {
-        // RTDB unavailable
-      }
+      } catch {}
     },
     [settings]
   );
