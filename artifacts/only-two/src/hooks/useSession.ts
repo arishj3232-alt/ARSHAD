@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import {
   doc,
   setDoc,
-  serverTimestamp,
+  deleteDoc,
   collection,
   getDocs,
 } from "firebase/firestore";
@@ -11,6 +11,8 @@ import { db, rtdb } from "@/lib/firebase";
 
 const ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
 const MAX_USERS = 2;
+const STALE_MS = 5 * 60 * 1000; // 5 minutes
+const HEARTBEAT_MS = 30 * 1000; // 30 seconds
 
 export type SessionUser = {
   id: string;
@@ -39,7 +41,6 @@ export function useSession() {
   const [codeError, setCodeError] = useState("");
 
   const joinRoom = useCallback(async (code: string, name: string) => {
-    // Trim + case-sensitive match
     if (code.trim() !== ROOM_CODE.trim()) {
       setCodeError("Wrong room code. This space is only for two.");
       return;
@@ -52,42 +53,67 @@ export function useSession() {
     localStorage.setItem("onlytwo-user-name", name.trim());
 
     try {
-      // Read current active presence docs to enforce 2-user limit
       const presenceCol = collection(db, "rooms", "main", "presence");
       const presenceSnap = await getDocs(presenceCol);
+      const now = Date.now();
 
-      const existingIds = presenceSnap.docs
-        .map((d) => d.id)
-        .filter((id) => id !== userId);
+      // Only count OTHER users who have been active within the stale threshold
+      const activeOtherIds = presenceSnap.docs
+        .filter((d) => {
+          if (d.id === userId) return false;
+          const data = d.data();
+          const ts: number = data.lastSeenTs ?? 0;
+          return now - ts < STALE_MS;
+        })
+        .map((d) => d.id);
 
-      if (existingIds.length >= MAX_USERS) {
+      if (activeOtherIds.length >= MAX_USERS) {
         setState({ status: "blocked" });
         return;
       }
 
-      // Write this user's presence to Firestore
+      // Write this user's presence to Firestore (with numeric timestamp)
       const userRef = doc(db, "rooms", "main", "presence", userId);
       await setDoc(userRef, {
         id: userId,
         name: name.trim(),
         online: true,
-        lastSeen: serverTimestamp(),
+        lastSeenTs: now,
       });
 
-      // RTDB presence — fire-and-forget; if RTDB isn't enabled, don't block entry
+      // Register beforeunload cleanup
+      const cleanupFirestore = () => {
+        deleteDoc(doc(db, "rooms", "main", "presence", userId)).catch(() => {});
+      };
+      window.addEventListener("beforeunload", cleanupFirestore);
+
+      // Heartbeat — update lastSeenTs every 30s to keep presence fresh
+      const heartbeat = setInterval(() => {
+        setDoc(doc(db, "rooms", "main", "presence", userId), {
+          id: userId,
+          name: name.trim(),
+          online: true,
+          lastSeenTs: Date.now(),
+        }).catch(() => {});
+      }, HEARTBEAT_MS);
+
+      // Cleanup heartbeat on page unload
+      window.addEventListener("beforeunload", () => clearInterval(heartbeat));
+
+      // RTDB presence — fire-and-forget
       try {
         const rtPresenceRef = ref(rtdb, `presence/${userId}`);
         await set(rtPresenceRef, {
           online: true,
           name: name.trim(),
-          lastSeen: Date.now(),
+          lastSeen: now,
         });
         onDisconnect(rtPresenceRef).update({
           online: false,
           lastSeen: Date.now(),
         });
       } catch {
-        // RTDB may not be enabled — presence/typing still works via Firestore
+        // RTDB unavailable
       }
 
       const sessUser: SessionUser = {
@@ -101,7 +127,7 @@ export function useSession() {
       setState({
         status: "active",
         user: sessUser,
-        otherId: existingIds[0] ?? null,
+        otherId: activeOtherIds[0] ?? null,
       });
     } catch (err) {
       console.error("Failed to join room:", err);
@@ -124,8 +150,6 @@ export function usePresence(userId: string | null) {
 
   useEffect(() => {
     if (!userId) return;
-
-    // Try RTDB first, fall back gracefully
     try {
       const presenceRef = ref(rtdb, "presence");
       const unsub = onValue(

@@ -29,10 +29,31 @@ export type Message = {
   deleted: boolean;
   seen: boolean;
   delivered: boolean;
+  viewOnce?: boolean;
+  reactions?: Record<string, string>;
   createdAt: Date | null;
 };
 
 const PAGE_SIZE = 20;
+
+function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message {
+  const data = d.data();
+  return {
+    id: d.id,
+    senderId: data.senderId as string,
+    type: (data.type as MessageType) ?? "text",
+    text: data.text as string | undefined,
+    mediaUrl: data.mediaUrl as string | undefined,
+    replyToId: data.replyToId as string | undefined,
+    replyToText: data.replyToText as string | undefined,
+    deleted: (data.deleted as boolean) ?? false,
+    seen: (data.seen as boolean) ?? false,
+    delivered: (data.delivered as boolean) ?? false,
+    viewOnce: (data.viewOnce as boolean) ?? false,
+    reactions: (data.reactions as Record<string, string>) ?? {},
+    createdAt: (data.createdAt as { toDate: () => Date } | null)?.toDate() ?? null,
+  };
+}
 
 export function useMessages(roomId: string, currentUserId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -53,25 +74,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
       if (docs.length > 0) {
         oldestDocRef.current = docs[docs.length - 1];
       }
-      const msgs: Message[] = docs
-        .map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            senderId: data.senderId,
-            type: data.type ?? "text",
-            text: data.text,
-            mediaUrl: data.mediaUrl,
-            replyToId: data.replyToId,
-            replyToText: data.replyToText,
-            deleted: data.deleted ?? false,
-            seen: data.seen ?? false,
-            delivered: data.delivered ?? false,
-            createdAt: data.createdAt?.toDate() ?? null,
-          } as Message;
-        })
-        .reverse();
-      setMessages(msgs);
+      setMessages(docs.map(mapDoc).reverse());
       setLoading(false);
       setHasMore(docs.length === PAGE_SIZE);
     });
@@ -90,25 +93,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     const snap = await getDocs(q);
     if (snap.docs.length > 0) {
       oldestDocRef.current = snap.docs[snap.docs.length - 1];
-      const older: Message[] = snap.docs
-        .map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            senderId: data.senderId,
-            type: data.type ?? "text",
-            text: data.text,
-            mediaUrl: data.mediaUrl,
-            replyToId: data.replyToId,
-            replyToText: data.replyToText,
-            deleted: data.deleted ?? false,
-            seen: data.seen ?? false,
-            delivered: data.delivered ?? false,
-            createdAt: data.createdAt?.toDate() ?? null,
-          } as Message;
-        })
-        .reverse();
-      setMessages((prev) => [...older, ...prev]);
+      setMessages((prev) => [...snap.docs.map(mapDoc).reverse(), ...prev]);
       setHasMore(snap.docs.length === PAGE_SIZE);
     } else {
       setHasMore(false);
@@ -123,6 +108,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
       mediaUrl?: string;
       replyToId?: string;
       replyToText?: string;
+      viewOnce?: boolean;
     }) => {
       if (!currentUserId) return;
       await addDoc(collection(db, "rooms", roomId, "messages"), {
@@ -135,6 +121,8 @@ export function useMessages(roomId: string, currentUserId: string | null) {
         deleted: false,
         seen: false,
         delivered: true,
+        viewOnce: payload.viewOnce ?? false,
+        reactions: {},
         createdAt: serverTimestamp(),
       });
     },
@@ -143,8 +131,8 @@ export function useMessages(roomId: string, currentUserId: string | null) {
 
   const deleteMessage = useCallback(
     async (messageId: string) => {
-      const ref = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(ref, { deleted: true });
+      const r = doc(db, "rooms", roomId, "messages", messageId);
+      await updateDoc(r, { deleted: true });
     },
     [roomId]
   );
@@ -152,10 +140,36 @@ export function useMessages(roomId: string, currentUserId: string | null) {
   const markSeen = useCallback(
     async (messageId: string) => {
       if (!currentUserId) return;
-      const ref = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(ref, { seen: true });
+      const r = doc(db, "rooms", roomId, "messages", messageId);
+      await updateDoc(r, { seen: true });
     },
     [roomId, currentUserId]
+  );
+
+  const addReaction = useCallback(
+    async (messageId: string, emoji: string) => {
+      if (!currentUserId) return;
+      const r = doc(db, "rooms", roomId, "messages", messageId);
+      await updateDoc(r, { [`reactions.${currentUserId}`]: emoji });
+    },
+    [roomId, currentUserId]
+  );
+
+  const removeReaction = useCallback(
+    async (messageId: string) => {
+      if (!currentUserId) return;
+      const r = doc(db, "rooms", roomId, "messages", messageId);
+      await updateDoc(r, { [`reactions.${currentUserId}`]: null });
+    },
+    [roomId, currentUserId]
+  );
+
+  const markViewOnceViewed = useCallback(
+    async (messageId: string) => {
+      const r = doc(db, "rooms", roomId, "messages", messageId);
+      await updateDoc(r, { deleted: true });
+    },
+    [roomId]
   );
 
   const searchMessages = useCallback(
@@ -170,20 +184,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
       const snap = await getDocs(q);
       const lower = searchText.toLowerCase();
       return snap.docs
-        .map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            senderId: data.senderId,
-            type: data.type ?? "text",
-            text: data.text,
-            mediaUrl: data.mediaUrl,
-            deleted: data.deleted ?? false,
-            seen: data.seen ?? false,
-            delivered: data.delivered ?? false,
-            createdAt: data.createdAt?.toDate() ?? null,
-          } as Message;
-        })
+        .map(mapDoc)
         .filter((m) => m.text?.toLowerCase().includes(lower))
         .reverse();
     },
@@ -199,6 +200,9 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     sendMessage,
     deleteMessage,
     markSeen,
+    addReaction,
+    removeReaction,
+    markViewOnceViewed,
     searchMessages,
   };
 }
