@@ -1,0 +1,322 @@
+Refactor, stabilize, and finalize the entire real-time chat + WebRTC calling system to production-grade quality. Fix all remaining edge cases, lifecycle issues, and synchronization gaps.
+
+---
+
+## CORE OBJECTIVE
+
+Deliver a fully stable system with:
+
+* Real-time chat + media
+* Reliable WebRTC voice/video calls
+* Accurate presence + typing system
+* Correct feature toggles (ghost, reveal, read receipts)
+* Secure and consistent media lifecycle
+* Clean identity system (username + DP)
+* Smooth mobile UX
+* Zero memory leaks or race conditions
+
+---
+
+1. USER IDENTITY + HEADER (FINAL)
+
+---
+
+* Do NOT rely on session-based otherId
+* Always derive other user from live presence:
+
+  Object.values(presence).find(u => u.id !== myId)
+
+UI:
+
+* Show username (not "Them")
+* Show DP on left
+* Fallback = first letter
+* Show:
+
+  * "🟢 Online"
+  * "Typing..."
+  * "Last seen {time}"
+  * "Connecting…" (loading)
+  * "Waiting…" (alone in room)
+
+---
+
+2. PRESENCE SYSTEM (SOFT DISCONNECT)
+
+---
+
+Backend:
+
+* Store users:
+  { id, name, room, online, lastSeenTs, dp }
+
+* On join:
+  online = true
+
+* On leave / tab close:
+  DO NOT delete document
+  update:
+  online = false
+  lastSeenTs = Date.now()
+
+* Maintain both Firestore + RTDB sync
+
+Frontend:
+
+* Subscribe to presence
+* Debounce updates (~150ms)
+* Derive other user dynamically
+
+---
+
+3. PRESENCE SLOT CONTROL
+
+---
+
+* Only count users where:
+  online === true AND not stale
+
+* Prevent ghost users blocking room
+
+---
+
+4. HEARTBEAT SYSTEM (CRITICAL CLEANUP)
+
+---
+
+* Use setInterval to update presence timestamp
+
+* Store interval ID in useRef (heartbeatRef)
+
+* On leave/unmount:
+  clearInterval(heartbeatRef.current)
+
+* Handle beforeunload:
+  store handler in ref and remove properly
+
+---
+
+5. TYPING + LIVE STATUS
+
+---
+
+* Emit "typing" (throttled)
+* Emit "stop-typing" after 1.5s
+* Avoid socket spam
+
+Support states:
+
+* 🟢 online
+* 🔴 offline / last seen
+* 🟡 viewing
+* 🔵 recording
+* ⚪ browsing
+
+---
+
+6. WEBRTC (FULL RELIABILITY)
+
+---
+
+MEDIA:
+
+* getUserMedia({ audio: true, video })
+* addTrack()
+
+REMOTE STREAM:
+
+* Store stream in state
+* Attach via useEffect (avoid race condition)
+
+AUDIO:
+
+* Always render hidden <audio autoPlay>
+* Assign remote stream
+* Call audio.play() after user interaction
+
+VIDEO:
+
+* Use <video autoplay playsInline>
+* Bind remote stream correctly
+
+ICE FIX (CRITICAL):
+
+* Queue ICE candidates before remoteDescription
+* Flush queue after setRemoteDescription
+
+SIGNAL ORDER:
+
+* Ensure correct offer → answer → ICE sequence
+
+CAMERA FLIP:
+
+* Use replaceTrack()
+* Toggle facingMode
+
+---
+
+7. ONE-TIME MEDIA
+
+---
+
+* On open:
+  mark viewed = true
+  invalidate media URL
+
+* UI:
+  show "Expired" after view
+  prevent reload access
+
+---
+
+8. REVEAL MODE (GLOBAL + SECURE)
+
+---
+
+* Show ALL deleted messages
+* Remove time limit → persistent toggle
+
+Message:
+{ deleted: true, hidden: true }
+
+SECURITY:
+
+* Remove public media URLs
+* Store backup securely
+
+---
+
+9. GHOST MODE + FEATURE FLAGS
+
+---
+
+Dynamic OFF pattern:
+
+off + first 2 letters of keyword
+
+Examples:
+offbh, offbe, offon
+
+Special:
+keyword "nun" → offnu
+
+Ensure:
+
+* ghostMode
+* revealMode
+* readReceipt
+  are synced globally
+
+---
+
+10. SWIPE REPLY (MOBILE UX)
+
+---
+
+* Real-time drag animation (no lag)
+* Rubber-band effect
+* Trigger at 60px–120px
+* Cancel gracefully
+* Smooth spring-back
+
+---
+
+11. ADMIN DEVICE CONTROL
+
+---
+
+* Use RTDB flag forceLogout/{userId}
+
+Client:
+
+* Listen for flag
+* CLEAR flag before logout
+* Call leaveRoom()
+
+---
+
+12. PROFILE (DP) SYSTEM
+
+---
+
+* Show DP in header
+* Prevent duplicate upload:
+
+Use browser API:
+crypto.subtle.digest("SHA-256")
+
+---
+
+13. MESSAGE STRUCTURE
+
+---
+
+Standardize:
+
+{
+id,
+text,
+mediaUrl,
+viewed,
+deleted,
+deletedForEveryone,
+hidden,
+senderId,
+timestamp
+}
+
+---
+
+14. SOCKET + STATE STABILITY
+
+---
+
+* All critical state via sockets
+* No local-only truth
+* Clean up listeners on unmount
+* Prevent duplicate listeners
+* Avoid race conditions
+
+---
+
+15. PERFORMANCE + UX
+
+---
+
+* Debounce presence updates
+* Prevent UI flicker
+* Handle loading states cleanly
+* Smooth transitions
+
+---
+
+16. SERVER STABILITY
+
+---
+
+* Prevent port conflicts (EADDRINUSE)
+* Ensure clean server restarts
+* Handle stale processes
+
+---
+
+## FINAL RESULT
+
+✔ Username + DP correct (no "Them")
+✔ Presence works (online, typing, last seen)
+✔ Soft disconnect works
+✔ No flicker in UI
+✔ Voice calls stable
+✔ Video calls stable
+✔ ICE never drops
+✔ Audio always plays
+✔ Camera flip works
+✔ One-time media disappears
+✔ Reveal mode shows ALL deleted
+✔ Ghost mode works
+✔ Swipe reply smooth
+✔ Admin removal works
+✔ No memory leaks
+✔ No race conditions
+
+Focus on reliability, synchronization, and production readiness.
