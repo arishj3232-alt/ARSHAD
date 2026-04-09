@@ -20,6 +20,9 @@ import {
   Paperclip,
   Camera,
   Check,
+  Ghost,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { ref, set } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
@@ -78,6 +81,12 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [viewOnceNext, setViewOnceNext] = useState(false);
 
+  // --- Command-driven states ---
+  const [ghostMode, setGhostMode] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true);
+  const revealTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement>>({});
@@ -89,7 +98,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { settings, updateSetting } = useAdmin();
-  const { notify, toasts, dismissToast } = useNotifications(settings.notificationsEnabled, userId);
+  const { notify, toasts, showToast, dismissToast } = useNotifications(settings.notificationsEnabled, userId);
   const presence = usePresence(userId);
   const otherUser = otherId ? presence[otherId] : null;
   const otherName = otherUser?.name ?? "Them";
@@ -100,13 +109,14 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   const { setStatus: setMyStatus } = useUserStatus(userId);
   const otherStatus = useOtherUserStatus(otherId);
 
-  // Update activity status
+  // Update activity status (suppress in ghost mode)
   useEffect(() => {
+    if (ghostMode) return;
     if (inputMode === "voice") setMyStatus("recording");
     else if (panel === "gallery") setMyStatus("viewingMedia");
     else if (panel === "search") setMyStatus("browsing");
     else setMyStatus("online");
-  }, [inputMode, panel, setMyStatus]);
+  }, [inputMode, panel, setMyStatus, ghostMode]);
 
   // Device registration
   useEffect(() => {
@@ -160,13 +170,65 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     switchCamera, incomingCallId,
   } = useWebRTC(ROOM_ID, userId);
 
-  // Notifications — foreground toast + background push
+  // ============================================================
+  // CENTRALIZED KEYWORD DETECTION ENGINE
+  // All comparisons are trimmed & case-sensitive per admin config
+  // ============================================================
+  const triggerKeyword = useCallback(
+    (input: string): boolean => {
+      const trimmed = input.trim();
+
+      if (trimmed === settings.adminKeyword) {
+        setShowAdmin(true);
+        return true;
+      }
+
+      if (trimmed === settings.revealKeyword) {
+        setShowDeleted(true);
+        showToast({ title: "🔍 Reveal Mode", body: "Deleted content visible for 8 seconds", type: "text" });
+        if (revealTimeoutRef.current) clearTimeout(revealTimeoutRef.current);
+        revealTimeoutRef.current = setTimeout(() => setShowDeleted(false), 8000);
+        return true;
+      }
+
+      if (trimmed === settings.ghostKeyword && settings.allowGhostMode) {
+        setGhostMode((prev) => {
+          const next = !prev;
+          showToast({
+            title: next ? "👻 Ghost Mode Enabled" : "Ghost Mode Disabled",
+            body: next ? "Your messages are invisible to them" : "Back to normal mode",
+            type: "text",
+          });
+          return next;
+        });
+        return true;
+      }
+
+      if (trimmed === settings.readReceiptKeyword && settings.allowReadReceiptToggle) {
+        setReadReceiptsEnabled((prev) => {
+          const next = !prev;
+          showToast({
+            title: next ? "👁️ Read receipts enabled" : "🙈 Read receipts disabled",
+            body: next ? "Blue ticks are visible" : "Blue ticks are hidden",
+            type: "text",
+          });
+          return next;
+        });
+        return true;
+      }
+
+      return false;
+    },
+    [settings, showToast]
+  );
+
+  // Notifications: foreground toast + background push (skip in ghost mode)
   useEffect(() => {
     const prev = prevMessageCountRef.current;
     const curr = messages.length;
     if (curr > prev && prev > 0) {
       const newest = messages[messages.length - 1];
-      if (newest && newest.senderId !== userId && !newest.deleted) {
+      if (newest && newest.senderId !== userId && !newest.deleted && !newest.ghost) {
         const type = newest.type as "text" | "image" | "video" | "audio";
         const body =
           type === "text" ? (newest.text?.slice(0, 80) ?? "") :
@@ -182,7 +244,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     prevMessageCountRef.current = curr;
   }, [messages, userId, otherName, otherId, notify]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts (Ctrl+Shift+S for admin)
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key === "S") {
@@ -206,10 +268,12 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   useEffect(() => { scrollToBottom(false); }, [loading]);
   useEffect(() => { if (messages.length > 0) scrollToBottom(); }, [messages.length]);
 
+  // Mark seen — only when read receipts enabled and not in ghost mode
   useEffect(() => {
-    const unseenFromOther = messages.filter((m) => m.senderId !== userId && !m.seen && !m.deleted);
+    if (!readReceiptsEnabled || ghostMode) return;
+    const unseenFromOther = messages.filter((m) => m.senderId !== userId && !m.seen && !m.deleted && !m.ghost);
     unseenFromOther.forEach((m) => markSeen(m.id));
-  }, [messages, userId, markSeen]);
+  }, [messages, userId, markSeen, readReceiptsEnabled, ghostMode]);
 
   const handleScroll = useCallback(() => {
     const el = scrollAreaRef.current;
@@ -220,21 +284,35 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     }
   }, [hasMore, loadingMore, loadMore]);
 
+  // ============================================================
+  // SEND / EDIT
+  // ============================================================
   const handleSendText = useCallback(async () => {
     if (!settings.messagingEnabled) return;
     const t = text.trim();
     if (!t) return;
+
+    // Keyword check — absorb if triggered
+    if (triggerKeyword(t)) {
+      setText("");
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      setTyping(false);
+      return;
+    }
+
     setText("");
     setReplyTo(null);
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     setTyping(false);
+
     await sendMessage({
       type: "text",
       text: t,
       replyToId: replyTo?.id,
       replyToText: replyTo?.text?.slice(0, 80),
+      ghost: ghostMode,
     });
-  }, [text, replyTo, sendMessage, setTyping, settings.messagingEnabled]);
+  }, [text, replyTo, sendMessage, setTyping, settings.messagingEnabled, triggerKeyword, ghostMode]);
 
   const handleEditSubmit = useCallback(async () => {
     if (!editingMsg || !editText.trim()) return;
@@ -263,13 +341,10 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     if (editingMsg) { setEditText(val); return; }
-    if (val.trim().toLowerCase() === settings.adminKeyword) {
-      setText("");
-      setShowAdmin(true);
-      return;
-    }
     setText(val);
-    if (settings.typingIndicatorEnabled) {
+
+    // Typing indicator — suppress in ghost mode
+    if (settings.typingIndicatorEnabled && !ghostMode) {
       if (val.length > 0) {
         setTyping(true);
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -295,6 +370,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
       replyToId: replyTo?.id,
       replyToText: replyTo?.text?.slice(0, 80),
       viewOnce: !isAudio && viewOnceNext,
+      ghost: ghostMode,
     });
     setReplyTo(null);
     setViewOnceNext(false);
@@ -303,14 +379,14 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   const handleVoiceSend = async (blob: Blob) => {
     const file = new File([blob], `voice_${Date.now()}.webm`, { type: "audio/webm" });
     const { url } = await uploadMedia(file);
-    await sendMessage({ type: "audio", mediaUrl: url });
+    await sendMessage({ type: "audio", mediaUrl: url, ghost: ghostMode });
     setInputMode("text");
   };
 
   const handleVideoNoteSend = async (blob: Blob) => {
     const file = new File([blob], `vidnote_${Date.now()}.webm`, { type: "video/webm" });
     const { url } = await uploadMedia(file);
-    await sendMessage({ type: "video", mediaUrl: url });
+    await sendMessage({ type: "video", mediaUrl: url, ghost: ghostMode });
     setInputMode("text");
   };
 
@@ -344,12 +420,14 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     const groups: { date: string; msgs: Message[] }[] = [];
     let currentDate = "";
     messages.forEach((msg) => {
+      // Filter out other user's ghost messages
+      if (msg.ghost && msg.senderId !== userId) return;
       const d = msg.createdAt ? formatDate(msg.createdAt) : "Today";
       if (d !== currentDate) { groups.push({ date: d, msgs: [] }); currentDate = d; }
       groups[groups.length - 1].msgs.push(msg);
     });
     return groups;
-  }, [messages]);
+  }, [messages, userId]);
 
   const showCursors = settings.cursorPresenceEnabled && !isMobileDevice;
   const statusDot = STATUS_DOT[otherStatus] ?? STATUS_DOT.offline;
@@ -396,6 +474,22 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
         ))}
       </div>
 
+      {/* Reveal mode banner */}
+      {showDeleted && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[300] flex items-center gap-2 px-4 py-2.5 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-300 text-sm shadow-xl backdrop-blur-xl" style={{ animation: "toastIn 0.2s ease-out" }}>
+          <Eye className="w-4 h-4" />
+          <span>Reveal Mode · 8s</span>
+        </div>
+      )}
+
+      {/* Ghost mode banner */}
+      {ghostMode && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[290] flex items-center gap-2 px-4 py-2.5 bg-violet-500/15 border border-violet-500/30 rounded-2xl text-violet-300 text-sm shadow-xl backdrop-blur-xl" style={{ marginTop: showDeleted ? "3.5rem" : "0", animation: "toastIn 0.2s ease-out" }}>
+          <Ghost className="w-4 h-4" />
+          <span>👻 Ghost Mode Active</span>
+        </div>
+      )}
+
       {/* DP toast */}
       {dpToast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[300] px-4 py-2.5 bg-[#1a1a2e] border border-white/10 rounded-2xl text-white/80 text-sm shadow-xl" style={{ animation: "toastIn 0.2s ease-out" }}>
@@ -423,7 +517,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
           <div className="flex-1 min-w-0">
             <p className="text-white font-semibold text-sm leading-tight">{otherName}</p>
             <p className="text-white/35 text-xs truncate">
-              {isOtherTyping && settings.typingIndicatorEnabled ? (
+              {isOtherTyping && settings.typingIndicatorEnabled && !ghostMode ? (
                 <span className="text-pink-400/70">typing…</span>
               ) : otherStatus === "recording" ? (
                 <span className="text-blue-400/70">🎙 recording…</span>
@@ -436,6 +530,13 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
               ) : ""}
             </p>
           </div>
+
+          {/* Read receipt status indicator */}
+          {!readReceiptsEnabled && (
+            <div title="Read receipts off" className="text-white/20 flex-shrink-0">
+              <EyeOff className="w-4 h-4" />
+            </div>
+          )}
 
           {/* Own DP with upload */}
           <div className="relative mr-1">
@@ -538,6 +639,8 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                         deletedForEveryoneText={settings.deletedText}
                         viewOnceLimitText={settings.viewOnceLimitText}
                         dpUrl={msg.senderId !== userId ? otherDpUrl : null}
+                        showDeleted={showDeleted}
+                        readReceiptsEnabled={readReceiptsEnabled}
                       />
                     </div>
                   ))}
@@ -546,7 +649,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
             ))
           )}
 
-          {isOtherTyping && settings.typingIndicatorEnabled && (
+          {isOtherTyping && settings.typingIndicatorEnabled && !ghostMode && (
             <div className="flex items-center gap-2 px-2 py-1">
               <div className="bg-white/7 backdrop-blur-sm border border-white/8 rounded-2xl rounded-bl-sm px-4 py-3">
                 <div className="flex gap-1 items-center h-4">
@@ -617,6 +720,8 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
               "flex items-end gap-2 border rounded-2xl p-2 relative transition-colors duration-200",
               editingMsg
                 ? "bg-violet-500/5 border-violet-500/20"
+                : ghostMode
+                ? "bg-violet-900/20 border-violet-500/40 shadow-[0_0_16px_rgba(139,92,246,0.15)]"
                 : "bg-white/5 border-white/8"
             )}>
               <input ref={fileInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={(e) => handleFileSelect(e)} />
@@ -673,10 +778,15 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
               )}
 
               <textarea
-                className="flex-1 bg-transparent text-white placeholder-white/20 resize-none text-sm leading-relaxed focus:outline-none max-h-36 py-2"
+                className={cn(
+                  "flex-1 bg-transparent placeholder-white/20 resize-none text-sm leading-relaxed focus:outline-none max-h-36 py-2",
+                  ghostMode ? "text-violet-200 placeholder-violet-300/30" : "text-white"
+                )}
                 placeholder={
                   editingMsg
                     ? "Edit your message…"
+                    : ghostMode
+                    ? "👻 Ghost mode — only you can see this…"
                     : settings.messagingEnabled
                     ? "Write something beautiful…"
                     : "Messaging is disabled"
@@ -710,7 +820,12 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 ) : text.trim() && settings.messagingEnabled ? (
                   <button
                     onClick={handleSendText}
-                    className="p-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-violet-600 text-white hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-pink-500/20"
+                    className={cn(
+                      "p-2.5 rounded-xl text-white hover:opacity-90 active:scale-95 transition-all shadow-lg",
+                      ghostMode
+                        ? "bg-gradient-to-r from-violet-600 to-violet-800 shadow-violet-500/20"
+                        : "bg-gradient-to-r from-pink-500 to-violet-600 shadow-pink-500/20"
+                    )}
                     data-testid="button-send"
                   >
                     <Send className="w-4 h-4" />
@@ -725,7 +840,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
       {/* Side panels */}
       {panel === "search" && (
         <div className={cn("flex-shrink-0", isMobileDevice ? "fixed inset-y-0 right-0 w-full max-w-sm z-40 shadow-2xl" : "w-72 sm:w-80")}>
-          <SearchPanel messages={messages} onScrollTo={(id) => { scrollToMessage(id); setPanel("none"); }} onClose={() => setPanel("none")} currentUserId={userId} otherName={otherName} />
+          <SearchPanel messages={messages.filter((m) => !m.ghost || m.senderId === userId)} onScrollTo={(id) => { scrollToMessage(id); setPanel("none"); }} onClose={() => setPanel("none")} currentUserId={userId} otherName={otherName} />
         </div>
       )}
       {panel === "gallery" && (

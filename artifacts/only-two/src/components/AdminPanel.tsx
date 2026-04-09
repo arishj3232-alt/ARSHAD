@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { X, Shield, Smartphone, Lock } from "lucide-react";
+import { X, Shield, Smartphone, Lock, Key } from "lucide-react";
 import { ref, onValue } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
@@ -48,6 +48,13 @@ const boolGroups: { title: string; rows: ToggleRow[] }[] = [
     ],
   },
   { title: "Notifications", rows: [{ key: "notificationsEnabled", label: "Push notifications" }] },
+  {
+    title: "Secret Features Access",
+    rows: [
+      { key: "allowGhostMode", label: "Allow Ghost Mode (👻 keyword)" },
+      { key: "allowReadReceiptToggle", label: "Allow Read Receipt Toggle" },
+    ],
+  },
 ];
 
 function Toggle({ enabled, onToggle }: { enabled: boolean; onToggle: () => void }) {
@@ -123,8 +130,21 @@ function DevicesPanel() {
   );
 }
 
+type KeywordField = {
+  key: keyof AdminSettings;
+  label: string;
+  hint: string;
+};
+
+const KEYWORD_FIELDS: KeywordField[] = [
+  { key: "adminKeyword", label: "Admin Panel", hint: "Opens the admin panel" },
+  { key: "revealKeyword", label: "Reveal Mode", hint: "Reveals deleted & view-once content for 8s" },
+  { key: "ghostKeyword", label: "Ghost Mode", hint: "Toggles stealth mode (invisible messages)" },
+  { key: "readReceiptKeyword", label: "Read Receipts", hint: "Toggles blue ticks on/off" },
+];
+
 export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
-  const [tab, setTab] = useState<"features" | "reactions" | "texts" | "devices">("features");
+  const [tab, setTab] = useState<"features" | "keywords" | "reactions" | "texts" | "devices">("features");
   const [emojiInput, setEmojiInput] = useState(settings.reactionEmojis.join(" "));
 
   const applyEmojis = () => {
@@ -150,13 +170,13 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
           </button>
         </div>
 
-        <div className="flex border-b border-white/5 flex-shrink-0">
-          {(["features", "reactions", "texts", "devices"] as const).map((t) => (
+        <div className="flex border-b border-white/5 flex-shrink-0 overflow-x-auto">
+          {(["features", "keywords", "reactions", "texts", "devices"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={cn(
-                "flex-1 py-2.5 text-[11px] font-medium capitalize transition",
+                "flex-1 py-2.5 text-[11px] font-medium capitalize transition whitespace-nowrap px-2",
                 tab === t ? "text-pink-400 border-b-2 border-pink-500" : "text-white/30 hover:text-white/60"
               )}
             >
@@ -219,19 +239,42 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                   ))}
                 </div>
               </div>
-
-              <div>
-                <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Admin Keyword</p>
-                <div className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
-                  <p className="text-white/40 text-xs mb-2">Type this in the message box to open admin panel on mobile</p>
-                  <input
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-pink-500/50 transition"
-                    defaultValue={settings.adminKeyword}
-                    onBlur={(e) => { const v = e.target.value.trim().toLowerCase(); if (v) onUpdate("adminKeyword", v); }}
-                  />
-                </div>
-              </div>
             </>
+          )}
+
+          {tab === "keywords" && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Key className="w-4 h-4 text-violet-400" />
+                <p className="text-white/60 text-sm font-medium">Secret Keywords</p>
+              </div>
+              <p className="text-white/25 text-xs mb-4 leading-relaxed px-1">
+                Type a keyword exactly in the message box — it triggers instantly without sending. Keywords are never shown to the other user.
+              </p>
+
+              <div className="space-y-3">
+                {KEYWORD_FIELDS.map((field) => (
+                  <div key={field.key} className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
+                    <p className="text-white/60 text-xs font-medium mb-0.5">{field.label}</p>
+                    <p className="text-white/25 text-[10px] mb-2">{field.hint}</p>
+                    <input
+                      key={`${field.key}_${settings[field.key]}`}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-violet-500/50 transition tracking-wider"
+                      defaultValue={settings[field.key] as string}
+                      onBlur={(e) => {
+                        const v = e.target.value.trim();
+                        if (v) onUpdate(field.key, v);
+                      }}
+                      placeholder="Enter keyword…"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-white/15 text-[10px] px-1 mt-4 leading-relaxed">
+                All keyword changes sync instantly to both users. Make sure both users know which keywords to use.
+              </p>
+            </div>
           )}
 
           {tab === "reactions" && (
@@ -330,7 +373,6 @@ export default function AdminPanel({ settings, onUpdate, onClose }: Props) {
                   />
                 </div>
               </div>
-
               <p className="text-white/20 text-[10px] px-1 mt-3">
                 The *️⃣ emoji in deleted/view-once text triggers the cyan premium glow effect on those messages.
               </p>

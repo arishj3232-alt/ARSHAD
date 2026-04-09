@@ -37,9 +37,11 @@ type Props = {
   deletedForEveryoneText?: string;
   viewOnceLimitText?: string;
   dpUrl?: string | null;
+  showDeleted?: boolean;
+  readReceiptsEnabled?: boolean;
 };
 
-/* Waveform bars used in audio player */
+/* Waveform bars for audio player */
 const WAVEFORM = [4,7,12,18,22,28,24,16,10,20,30,26,14,8,22,18,12,6,16,24];
 
 function AudioPlayer({ url }: { url: string }) {
@@ -136,7 +138,7 @@ function FullscreenViewer({
       {type === "image" ? (
         <img
           src={url}
-          alt="View once"
+          alt="Full view"
           className="max-w-full max-h-full object-contain rounded-xl"
           style={{ animation: "scaleIn 0.2s ease-out" }}
           onClick={(e) => e.stopPropagation()}
@@ -160,14 +162,21 @@ function ViewOnceMedia({
   isOwn,
   onViewOnce,
   limitText,
+  showDeleted,
 }: {
   message: Message;
   isOwn: boolean;
   onViewOnce: (id: string) => void;
   limitText: string;
+  showDeleted: boolean;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
   const hasStar = limitText.includes("*️⃣");
+
+  // Reveal mode: show original media if available
+  const revealUrl = showDeleted
+    ? (message.originalMediaUrl ?? message.mediaUrl ?? null)
+    : null;
 
   const handleView = () => {
     if (isOwn || message.viewOnceViewed) return;
@@ -178,6 +187,41 @@ function ViewOnceMedia({
     setFullscreen(false);
     onViewOnce(message.id);
   }, [message.id, onViewOnce]);
+
+  // Reveal mode for non-owner
+  if (showDeleted && revealUrl && message.viewOnceViewed && !isOwn) {
+    return (
+      <>
+        {fullscreen && (
+          <FullscreenViewer
+            url={revealUrl}
+            type={message.type as "image" | "video"}
+            onClose={() => setFullscreen(false)}
+          />
+        )}
+        <button
+          onClick={() => setFullscreen(true)}
+          className="relative block rounded-xl overflow-hidden border border-amber-400/30"
+          style={{ maxWidth: 260, maxHeight: 300 }}
+        >
+          {message.type === "image" && (
+            <img
+              src={revealUrl}
+              alt="Revealed"
+              className="max-w-[260px] max-h-[300px] object-cover rounded-xl opacity-80"
+              loading="lazy"
+            />
+          )}
+          {message.type === "video" && (
+            <video src={revealUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+          )}
+          <div className="absolute inset-0 bg-amber-500/10 flex items-end justify-start p-2 rounded-xl">
+            <span className="text-[9px] text-amber-300/70 bg-black/40 rounded-lg px-1.5 py-0.5">🔍 Revealed</span>
+          </div>
+        </button>
+      </>
+    );
+  }
 
   if (message.viewOnceViewed) {
     return (
@@ -265,6 +309,8 @@ export default function ChatMessage({
   deletedForEveryoneText = "This message was deleted",
   viewOnceLimitText = "This image has reached its limit",
   dpUrl,
+  showDeleted = false,
+  readReceiptsEnabled = true,
 }: Props) {
   const [showActions, setShowActions] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -323,8 +369,20 @@ export default function ChatMessage({
 
   const isDeletedForMe = !!(currentUserId && message.deletedFor?.[currentUserId]);
 
-  // --- DELETED FOR EVERYONE ---
+  // ---- DELETED FOR EVERYONE ----
   if (message.deleted || message.deletedForEveryone) {
+    // Reveal mode: show original text if available
+    if (showDeleted && message.originalText) {
+      return (
+        <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
+          <div className="px-4 py-2.5 rounded-2xl max-w-xs border border-amber-400/30 bg-amber-500/5 text-amber-200/80 text-sm relative">
+            <p>{message.originalText}</p>
+            <span className="text-[9px] text-amber-400/50 block mt-1">🔍 Revealed · deleted message</span>
+          </div>
+        </div>
+      );
+    }
+
     const displayText = message.text || deletedForEveryoneText;
     const hasStar = displayText.includes("*️⃣");
     return (
@@ -342,6 +400,9 @@ export default function ChatMessage({
   }
 
   if (isDeletedForMe) return null;
+
+  // Ghost message styling: if own ghost → dashed violet border, semi-transparent
+  const isGhost = message.ghost && isOwn;
 
   return (
     <div
@@ -365,8 +426,8 @@ export default function ChatMessage({
 
       <div className={cn("flex items-end gap-2 max-w-[80%] sm:max-w-[75%]", isOwn && "flex-row-reverse")}>
 
-        {/* Action buttons — appear on hover */}
-        {showActions && (
+        {/* Action buttons */}
+        {showActions && !isGhost && (
           <div className={cn(
             "flex flex-col items-center gap-1 mb-1 transition-all duration-150",
             isOwn ? "mr-1" : "ml-1"
@@ -458,16 +519,23 @@ export default function ChatMessage({
           <div
             className={cn(
               "relative rounded-[20px] overflow-visible",
-              message.viewOnce && message.viewOnceViewed && viewOnceLimitText.includes("*️⃣")
+              isGhost
+                ? "bg-violet-900/20 border border-dashed border-violet-500/40 text-violet-200/80 opacity-70 rounded-br-sm"
+                : message.viewOnce && message.viewOnceViewed && viewOnceLimitText.includes("*️⃣")
                 ? "border border-cyan-400/40 bg-cyan-500/5 shadow-[0_0_12px_rgba(0,255,255,0.15)]"
                 : isOwn
                 ? "bg-gradient-to-br from-pink-500 to-violet-600 text-white rounded-br-sm shadow-lg shadow-pink-500/20"
                 : "bg-white/8 backdrop-blur-sm border border-white/10 text-white rounded-bl-sm"
             )}
-            style={{
-              animation: "msgFadeIn 0.2s ease-out",
-            }}
+            style={{ animation: "msgFadeIn 0.2s ease-out" }}
           >
+            {/* Ghost indicator chip */}
+            {isGhost && (
+              <div className="absolute -top-2 -right-1 text-[9px] bg-violet-900/80 border border-violet-500/30 text-violet-300/70 rounded-full px-1.5 py-0.5 z-10">
+                👻
+              </div>
+            )}
+
             {message.replyToId && (
               <button
                 onClick={() => onScrollTo?.(message.replyToId!)}
@@ -490,6 +558,7 @@ export default function ChatMessage({
                   isOwn={isOwn}
                   onViewOnce={onViewOnce ?? (() => {})}
                   limitText={viewOnceLimitText}
+                  showDeleted={showDeleted}
                 />
               ) : (
                 <>
@@ -521,10 +590,13 @@ export default function ChatMessage({
                 {message.edited && (
                   <span className="text-[9px] opacity-35 italic">edited</span>
                 )}
+                {isGhost && (
+                  <span className="text-[9px] text-violet-400/50 italic">ghost</span>
+                )}
                 <span className="text-[10px] opacity-40">{formatTime(message.createdAt)}</span>
-                {isOwn && (
+                {isOwn && !isGhost && (
                   <span className="opacity-50">
-                    {message.seen ? (
+                    {readReceiptsEnabled && message.seen ? (
                       <CheckCheck className="w-3 h-3 text-sky-300" />
                     ) : message.delivered ? (
                       <CheckCheck className="w-3 h-3" />
@@ -538,7 +610,7 @@ export default function ChatMessage({
           </div>
 
           {/* Reactions */}
-          {Object.keys(reactionCounts).length > 0 && (
+          {Object.keys(reactionCounts).length > 0 && !isGhost && (
             <div className={cn("flex flex-wrap gap-1", isOwn ? "justify-end" : "justify-start")}>
               {Object.entries(reactionCounts).map(([emoji, count]) => (
                 <button

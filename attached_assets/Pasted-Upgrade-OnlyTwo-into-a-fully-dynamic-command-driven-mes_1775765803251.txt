@@ -1,0 +1,287 @@
+Upgrade OnlyTwo into a fully dynamic, command-driven messaging system with admin-controlled keywords, ghost mode, reveal mode, and read receipt control.
+
+CRITICAL:
+
+* DO NOT break existing chat, media, notifications, or admin systems
+* Remove ALL hardcoded keywords
+* Use ONLY admin-controlled dynamic settings
+* Ensure real-time sync across users
+
+==================================================
+🔐 1. UNIFIED DYNAMIC KEYWORD SYSTEM
+====================================
+
+Replace ALL hardcoded keywords:
+
+❌ "laura"
+❌ "BEN10"
+❌ "bhoot"
+❌ "ONOFF"
+
+WITH admin-controlled settings:
+
+{
+adminKeyword: string
+revealKeyword: string
+ghostKeyword: string
+readReceiptKeyword: string
+}
+
+Default values:
+
+adminKeyword = "laura"
+revealKeyword = "BEN10"
+ghostKeyword = "bhoot"
+readReceiptKeyword = "ONOFF"
+
+==================================================
+🧠 2. CENTRALIZED KEYWORD DETECTION ENGINE
+==========================================
+
+Before sending ANY message:
+
+const input = message.trim()
+
+IF input === settings.adminKeyword:
+→ DO NOT send message
+→ Open Admin Panel
+
+IF input === settings.revealKeyword:
+→ DO NOT send message
+→ Activate Reveal Mode
+
+IF input === settings.ghostKeyword:
+→ DO NOT send message
+→ Toggle Ghost Mode
+
+IF input === settings.readReceiptKeyword:
+→ DO NOT send message
+→ Toggle Read Receipts
+
+==================================================
+⚡ 3. UX BEHAVIOR (CRITICAL)
+===========================
+
+When keyword is triggered:
+
+✔ Clear input instantly
+✔ NO message bubble
+✔ NO delay
+✔ Trigger action immediately
+
+==================================================
+🔑 4. REVEAL MODE (DYNAMIC BEN10 SYSTEM)
+========================================
+
+State:
+
+const [showDeleted, setShowDeleted] = useState(false)
+
+Trigger:
+
+setShowDeleted(true)
+
+Auto reset after 8 seconds:
+
+setTimeout(() => setShowDeleted(false), 8000)
+
+Behavior:
+
+✔ Reveal deleted messages using originalText
+✔ Reveal view-once media using originalMediaUrl (if exists)
+
+Conditions:
+
+IF msg.originalText exists → show
+IF msg.originalMediaUrl exists → show
+
+Otherwise:
+→ keep locked state
+
+==================================================
+👻 5. GHOST MODE SYSTEM (STEALTH MODE)
+======================================
+
+State:
+
+const [ghostMode, setGhostMode] = useState(false)
+
+Toggle:
+
+setGhostMode(prev => !prev)
+
+Behavior when ON:
+
+✔ Messages visible ONLY to sender
+✔ NOT visible to other user
+✔ NO notifications
+✔ NO typing indicator
+✔ NO seen status
+✔ NO presence updates
+
+Message structure:
+
+{
+text: "...",
+ghost: true,
+senderId: userId
+}
+
+Render rule:
+
+IF msg.ghost === true AND msg.senderId !== currentUser:
+→ DO NOT render
+
+==================================================
+🎨 6. GHOST MODE UI
+===================
+
+When ON:
+
+✔ Show: "👻 Ghost Mode Active"
+✔ Purple glow on input bar
+✔ Ghost messages:
+
+* transparent
+* dashed border
+
+==================================================
+🔔 7. NOTIFICATION CONTROL (GHOST MODE)
+=======================================
+
+If ghostMode === true:
+
+→ DO NOT send FCM notification
+
+==================================================
+👁️ 8. READ RECEIPT TOGGLE SYSTEM
+=================================
+
+State:
+
+const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true)
+
+Toggle:
+
+setReadReceiptsEnabled(prev => !prev)
+
+==================================================
+👁️ 9. READ RECEIPT BEHAVIOR
+============================
+
+IF readReceiptsEnabled === true:
+
+✔ single tick (sent)
+✔ double tick (delivered)
+✔ blue tick (seen)
+
+IF readReceiptsEnabled === false:
+
+❌ hide blue ticks
+❌ hide seen status
+
+✔ still show sent + delivered
+
+==================================================
+📡 10. BACKEND CONTROL (READ RECEIPTS)
+======================================
+
+When OFF:
+
+✔ DO NOT update "seen" in Firestore
+
+OR
+
+✔ store but DO NOT render (optional)
+
+==================================================
+🎨 11. TOAST FEEDBACK SYSTEM
+============================
+
+Show toasts:
+
+Ghost mode:
+✔ "👻 Ghost Mode Enabled"
+✔ "Ghost Mode Disabled"
+
+Read receipts:
+✔ "👁️ Read receipts enabled"
+✔ "🙈 Read receipts disabled"
+
+==================================================
+⚙️ 12. ADMIN PANEL (EXPANDED)
+=============================
+
+Add section:
+
+"Secret Keywords"
+
+Editable fields:
+
+✔ Admin Panel Keyword
+✔ Reveal Mode Keyword
+✔ Ghost Mode Keyword
+✔ Read Receipt Keyword
+
+All changes:
+
+✔ saved to RTDB / Firestore
+✔ applied instantly
+✔ synced across users
+
+==================================================
+🛡️ 13. ADMIN CONTROL FLAGS
+===========================
+
+Add:
+
+allowGhostMode: boolean
+allowReadReceiptToggle: boolean
+
+If disabled:
+
+→ ignore respective keyword
+
+==================================================
+📱 14. MOBILE + DESKTOP SUPPORT
+===============================
+
+Ensure:
+
+✔ works on mobile keyboard
+✔ works on desktop
+✔ no layout break
+✔ smooth transitions
+
+==================================================
+🔒 15. SECURITY RULES
+=====================
+
+✔ keywords NEVER shown in UI
+✔ keywords NEVER sent as messages
+✔ input trimmed before comparison
+
+==================================================
+🚀 FINAL RESULT
+===============
+
+User can:
+
+✔ type secret keyword → trigger action
+✔ no message sent
+✔ instant behavior
+
+Admin can control:
+
+✔ ALL keywords dynamically
+✔ ghost mode access
+✔ read receipt toggle
+
+System becomes:
+
+✔ command-driven
+✔ customizable
+✔ stealth-enabled
+✔ production-level
+
+NO hardcoded values anywhere.

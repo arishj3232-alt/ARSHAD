@@ -24,6 +24,8 @@ export type Message = {
   type: MessageType;
   text?: string;
   mediaUrl?: string;
+  originalText?: string;
+  originalMediaUrl?: string;
   replyToId?: string;
   replyToText?: string;
   deleted: boolean;
@@ -33,6 +35,7 @@ export type Message = {
   delivered: boolean;
   viewOnce?: boolean;
   viewOnceViewed?: boolean;
+  ghost?: boolean;
   reactions?: Record<string, string>;
   edited?: boolean;
   createdAt: Date | null;
@@ -48,6 +51,8 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     type: (data.type as MessageType) ?? "text",
     text: data.text as string | undefined,
     mediaUrl: data.mediaUrl as string | undefined,
+    originalText: data.originalText as string | undefined,
+    originalMediaUrl: data.originalMediaUrl as string | undefined,
     replyToId: data.replyToId as string | undefined,
     replyToText: data.replyToText as string | undefined,
     deleted: (data.deleted as boolean) ?? false,
@@ -57,6 +62,7 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     delivered: (data.delivered as boolean) ?? false,
     viewOnce: (data.viewOnce as boolean) ?? false,
     viewOnceViewed: (data.viewOnceViewed as boolean) ?? false,
+    ghost: (data.ghost as boolean) ?? false,
     edited: (data.edited as boolean) ?? false,
     reactions: Object.fromEntries(
       Object.entries((data.reactions as Record<string, string>) ?? {}).filter(
@@ -119,6 +125,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
       replyToId?: string;
       replyToText?: string;
       viewOnce?: boolean;
+      ghost?: boolean;
     }) => {
       if (!currentUserId) return;
       await addDoc(collection(db, "rooms", roomId, "messages"), {
@@ -126,6 +133,9 @@ export function useMessages(roomId: string, currentUserId: string | null) {
         type: payload.type,
         text: payload.text ?? null,
         mediaUrl: payload.mediaUrl ?? null,
+        // Preserve originals for reveal mode
+        originalText: payload.text ?? null,
+        originalMediaUrl: payload.mediaUrl ?? null,
         replyToId: payload.replyToId ?? null,
         replyToText: payload.replyToText ?? null,
         deleted: false,
@@ -135,6 +145,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
         delivered: true,
         viewOnce: payload.viewOnce ?? false,
         viewOnceViewed: false,
+        ghost: payload.ghost ?? false,
         edited: false,
         reactions: {},
         createdAt: serverTimestamp(),
@@ -164,6 +175,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
   const deleteForEveryone = useCallback(
     async (messageId: string, deletedText = "This message was deleted") => {
       const r = doc(db, "rooms", roomId, "messages", messageId);
+      // originalText and originalMediaUrl remain untouched for reveal mode
       await updateDoc(r, {
         deleted: true,
         deletedForEveryone: true,
@@ -173,8 +185,6 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     },
     [roomId]
   );
-
-  const deleteMessage = deleteForEveryone;
 
   const markSeen = useCallback(
     async (messageId: string) => {
@@ -221,6 +231,7 @@ export function useMessages(roomId: string, currentUserId: string | null) {
         (m) =>
           !m.deleted &&
           !(currentUserId && m.deletedFor?.[currentUserId]) &&
+          !m.ghost &&
           m.type === "text" &&
           m.text?.toLowerCase().includes(lower)
       );
@@ -236,7 +247,6 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     loadMore,
     sendMessage,
     editMessage,
-    deleteMessage,
     deleteForMe,
     deleteForEveryone,
     markSeen,

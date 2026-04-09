@@ -19,12 +19,17 @@ export type AdminSettings = {
   lastSeenEnabled: boolean;
   cursorPresenceEnabled: boolean;
   notificationsEnabled: boolean;
+  allowGhostMode: boolean;
+  allowReadReceiptToggle: boolean;
   reactionEmojis: string[];
   fastReactionEmoji: string;
   replyMode: ReplyMode;
   deletedText: string;
   viewOnceLimitText: string;
   adminKeyword: string;
+  revealKeyword: string;
+  ghostKeyword: string;
+  readReceiptKeyword: string;
   roomCode: string;
 };
 
@@ -43,12 +48,17 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   lastSeenEnabled: true,
   cursorPresenceEnabled: true,
   notificationsEnabled: true,
+  allowGhostMode: true,
+  allowReadReceiptToggle: true,
   reactionEmojis: ["❤️", "😂", "👍", "😮", "🔥"],
   fastReactionEmoji: "❤️",
   replyMode: "both",
   deletedText: "This message was deleted",
   viewOnceLimitText: "This image has reached its limit",
   adminKeyword: "laura",
+  revealKeyword: "BEN10",
+  ghostKeyword: "bhoot",
+  readReceiptKeyword: "ONOFF",
   roomCode: (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi",
 };
 
