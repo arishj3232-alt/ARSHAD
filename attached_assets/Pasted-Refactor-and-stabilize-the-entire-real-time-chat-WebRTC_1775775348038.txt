@@ -1,0 +1,293 @@
+Refactor and stabilize the entire real-time chat + WebRTC calling system to production-grade quality. Fix all remaining bugs, edge cases, race conditions, and UX inconsistencies.
+
+---
+
+## CORE OBJECTIVE
+
+Deliver a fully stable system with:
+
+* Real-time chat + media
+* Reliable WebRTC voice/video calls
+* Accurate presence + typing system
+* Correct feature toggles (ghost, reveal, read receipts)
+* Secure media lifecycle
+* Clean identity system (username + DP)
+* Smooth mobile UX
+
+---
+
+1. USER IDENTITY + HEADER (FINAL FIX)
+
+---
+
+* Do NOT rely on session-based otherId (can be null)
+
+* Always derive the other user from live presence:
+
+  Object.values(presence).find(u => u.id !== myId)
+
+* Show:
+
+  * Username (not "Them")
+  * Profile picture (DP)
+  * Status (online / typing / last seen)
+
+UI states:
+
+* "Connecting…" → presence loading
+* "Waiting…" → only one user in room
+
+---
+
+2. REAL-TIME PRESENCE SYSTEM
+
+---
+
+Backend:
+
+* Maintain users:
+  { id, name, room, status, lastSeen, dp }
+
+* On join → status = online
+
+* On disconnect:
+
+  * status = offline
+  * lastSeen = timestamp
+  * DO NOT delete user immediately
+
+Frontend:
+
+* Subscribe to presence
+* Derive other user dynamically
+* Debounce updates to prevent flicker
+
+---
+
+3. TYPING + LIVE STATES
+
+---
+
+* Emit "typing" with throttle
+* Emit "stop-typing" after inactivity
+* Avoid socket spam
+
+Support states:
+
+* 🟢 online
+* 🔴 offline / last seen
+* 🟡 viewing
+* 🔵 recording
+* ⚪ browsing
+
+---
+
+4. WEBRTC — FULL RELIABILITY FIX
+
+---
+
+Fix all signaling + media issues:
+
+MEDIA:
+
+* getUserMedia({ audio: true, video })
+* Add tracks via addTrack()
+
+REMOTE STREAM:
+
+* DO NOT bind stream directly in ontrack
+* Store stream in state
+* Attach via useEffect after DOM mounts
+
+AUDIO FIX:
+
+* Always render hidden <audio autoPlay>
+* Assign remote stream
+* Call audio.play() after user interaction
+
+VIDEO FIX:
+
+* Ensure <video autoplay playsInline>
+* Bind remote stream correctly
+
+ICE FIX (CRITICAL):
+
+* Queue ICE candidates if remoteDescription not set
+* Flush queue after setRemoteDescription
+
+SIGNALING ORDER:
+
+* Ensure setRemoteDescription completes before adding ICE
+
+CAMERA FLIP:
+
+* Use replaceTrack()
+* Toggle facingMode user ↔ environment
+
+---
+
+5. ONE-TIME MEDIA SYSTEM
+
+---
+
+* On open:
+  emit "view-once-opened"
+* Mark:
+  viewed = true
+  invalidate media URL
+
+UI:
+
+* If viewed → show "Expired"
+* Prevent reload access
+
+---
+
+6. REVEAL MODE (GLOBAL + SECURE)
+
+---
+
+* Show ALL deleted messages
+* Remove 8s timeout → persistent toggle
+
+Message structure:
+{ deleted: true, hidden: true }
+
+SECURITY:
+
+* Remove public media URLs after deletion
+* Only allow controlled reveal access
+
+---
+
+7. GHOST MODE + FEATURE FLAGS
+
+---
+
+Dynamic keyword system:
+
+Format:
+off + first 2 letters of keyword
+
+Examples:
+offbh → ghost off
+offbe → reveal off
+offon → read receipt off
+
+Special case:
+keyword "nun" → offnu
+
+Ensure all features are:
+
+* centrally managed
+* synced across users
+
+---
+
+8. SWIPE REPLY (ADVANCED UX)
+
+---
+
+* Real-time drag animation (no React lag)
+* Rubber-band effect beyond threshold
+* Trigger reply at ≥ 60px
+* Cancel if released early
+* Smooth spring-back animation
+
+Ensure:
+
+* touchAction: pan-y
+* will-change: transform
+
+---
+
+9. ADMIN DEVICE CONTROL
+
+---
+
+* Admin removes user via RTDB flag
+
+Client:
+
+* Listen for forceLogout
+* CLEAR flag before logout
+* Call leaveRoom()
+
+Prevent infinite loops
+
+---
+
+10. PROFILE (DP) SYSTEM
+
+---
+
+* Display DP in header
+* Fallback = first letter
+
+Prevent duplicate upload:
+
+* Use crypto.subtle.digest (browser)
+* Compare hashes before upload
+
+---
+
+11. MESSAGE STRUCTURE
+
+---
+
+Standardize:
+
+{
+id,
+text,
+mediaUrl,
+viewed,
+deleted,
+deletedForEveryone,
+hidden,
+senderId,
+timestamp
+}
+
+---
+
+12. SOCKET + STATE STABILITY
+
+---
+
+* All critical state via socket
+* No local-only truth
+* Clean listeners on unmount
+* Prevent duplicate listeners
+* Avoid race conditions
+
+---
+
+13. PERFORMANCE + UX POLISH
+
+---
+
+* Debounce presence updates
+* Prevent UI flicker
+* Handle loading states properly
+* Smooth transitions everywhere
+
+---
+
+## FINAL RESULT EXPECTATION
+
+✔ Real username + DP shown (no "Them")
+✔ Presence works (online, typing, last seen)
+✔ Voice calls stable
+✔ Video calls stable (no black screen)
+✔ ICE never drops
+✔ Audio always plays
+✔ Camera flip works
+✔ One-time media disappears correctly
+✔ Reveal mode shows ALL deleted content
+✔ Ghost mode toggles correctly
+✔ Swipe reply feels like WhatsApp
+✔ Admin can remove devices safely
+✔ No race conditions or silent failures
+
+Focus on real-time synchronization, reliability, and clean architecture.

@@ -1,18 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   doc,
   setDoc,
-  deleteDoc,
+  updateDoc,
   collection,
   getDocs,
+  onSnapshot,
 } from "firebase/firestore";
 import { ref, set, onDisconnect, onValue, get } from "firebase/database";
 import { db, rtdb } from "@/lib/firebase";
 
 const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
-const MAX_USERS = 2;
-const STALE_MS = 5 * 60 * 1000;
-const HEARTBEAT_MS = 30 * 1000;
+const MAX_OTHER_USERS = 1;         // block a 3rd user (room is for 2)
+const STALE_MS = 5 * 60 * 1000;   // 5 min heartbeat stale threshold
+const HEARTBEAT_MS = 25 * 1000;   // refresh presence every 25 s
+const PRESENCE_DEBOUNCE_MS = 150; // batch rapid Firestore updates
 
 export type SessionUser = {
   id: string;
@@ -46,12 +48,41 @@ async function getAdminRoomCode(): Promise<string> {
   }
 }
 
+/** Soft disconnect — keeps doc alive so the other user sees "last seen" */
+async function markOffline(userId: string): Promise<void> {
+  const now = Date.now();
+  try {
+    await updateDoc(doc(db, "rooms", "main", "presence", userId), {
+      online: false,
+      lastSeenTs: now,
+    });
+  } catch {}
+  try {
+    await set(ref(rtdb, `status/${userId}`), { status: "offline", ts: now });
+  } catch {}
+}
+
+// ─── useSession ───────────────────────────────────────────────────────────────
+
 export function useSession() {
   const [state, setState] = useState<SessionState>({ status: "idle" });
   const [codeError, setCodeError] = useState("");
 
+  // Stable refs for cleanup — survive re-renders without stale closures
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const unloadHandlerRef = useRef<(() => void) | null>(null);
+  const activeUserIdRef = useRef<string | null>(null);
+
+  // Clean up on component unmount (e.g. hot reload, app teardown)
+  useEffect(() => {
+    return () => {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      if (unloadHandlerRef.current) window.removeEventListener("beforeunload", unloadHandlerRef.current);
+      if (activeUserIdRef.current) markOffline(activeUserIdRef.current);
+    };
+  }, []);
+
   const joinRoom = useCallback(async (code: string, name: string) => {
-    // Check against admin-controlled room code (falls back to env var)
     const validCode = await getAdminRoomCode();
     if (code.trim() !== validCode.trim()) {
       setCodeError("Wrong room code. This space is only for two.");
@@ -65,65 +96,59 @@ export function useSession() {
     localStorage.setItem("onlytwo-user-name", name.trim());
 
     try {
+      // Block check — only count genuinely online others
       const presenceCol = collection(db, "rooms", "main", "presence");
       const presenceSnap = await getDocs(presenceCol);
       const now = Date.now();
 
-      const activeOtherIds = presenceSnap.docs
-        .filter((d) => {
-          if (d.id === userId) return false;
-          const data = d.data();
-          const ts: number = data.lastSeenTs ?? 0;
-          return now - ts < STALE_MS;
-        })
-        .map((d) => d.id);
+      const activeOtherCount = presenceSnap.docs.filter((d) => {
+        if (d.id === userId) return false;
+        const data = d.data();
+        const ts: number = data.lastSeenTs ?? 0;
+        return (data.online === true) && (now - ts < STALE_MS);
+      }).length;
 
-      if (activeOtherIds.length >= MAX_USERS) {
+      if (activeOtherCount > MAX_OTHER_USERS) {
         setState({ status: "blocked" });
         return;
       }
 
-      const userRef = doc(db, "rooms", "main", "presence", userId);
-      await setDoc(userRef, {
-        id: userId,
-        name: name.trim(),
-        online: true,
-        lastSeenTs: now,
-      });
+      // Write own presence doc (merge to preserve any extra fields)
+      await setDoc(
+        doc(db, "rooms", "main", "presence", userId),
+        { id: userId, name: name.trim(), online: true, lastSeenTs: now },
+        { merge: true }
+      );
 
-      const cleanupFirestore = () => {
-        deleteDoc(doc(db, "rooms", "main", "presence", userId)).catch(() => {});
-      };
-      window.addEventListener("beforeunload", cleanupFirestore);
+      // RTDB presence + server-side onDisconnect
+      const rtdbRef = ref(rtdb, `status/${userId}`);
+      await set(rtdbRef, { status: "online", ts: now }).catch(() => {});
+      onDisconnect(rtdbRef).set({ status: "offline", ts: Date.now() }).catch(() => {});
 
-      const heartbeat = setInterval(() => {
-        setDoc(doc(db, "rooms", "main", "presence", userId), {
-          id: userId,
-          name: name.trim(),
-          online: true,
-          lastSeenTs: Date.now(),
-        }).catch(() => {});
+      // Clear any stale heartbeat before starting a new one
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = setInterval(() => {
+        setDoc(doc(db, "rooms", "main", "presence", userId), { online: true, lastSeenTs: Date.now() }, { merge: true }).catch(() => {});
+        set(rtdbRef, { status: "online", ts: Date.now() }).catch(() => {});
       }, HEARTBEAT_MS);
 
-      window.addEventListener("beforeunload", () => clearInterval(heartbeat));
+      // Best-effort soft-disconnect on hard tab close
+      if (unloadHandlerRef.current) window.removeEventListener("beforeunload", unloadHandlerRef.current);
+      const handleUnload = () => {
+        updateDoc(doc(db, "rooms", "main", "presence", userId), { online: false, lastSeenTs: Date.now() }).catch(() => {});
+        set(rtdbRef, { status: "offline", ts: Date.now() }).catch(() => {});
+      };
+      unloadHandlerRef.current = handleUnload;
+      window.addEventListener("beforeunload", handleUnload);
 
-      // RTDB presence with onDisconnect cleanup
-      const rtdbRef = ref(rtdb, `status/${userId}`);
-      await set(rtdbRef, { status: "online", ts: Date.now() }).catch(() => {});
-      onDisconnect(rtdbRef).set({ status: "offline", ts: Date.now() }).catch(() => {});
+      activeUserIdRef.current = userId;
 
       setState({
         status: "active",
-        user: {
-          id: userId,
-          name: name.trim(),
-          joinedAt: new Date(),
-          online: true,
-          lastSeen: null,
-        },
+        user: { id: userId, name: name.trim(), joinedAt: new Date(), online: true, lastSeen: null },
         otherId: null,
       });
-    } catch (err) {
+    } catch {
       setState({ status: "idle" });
       setCodeError("Connection failed. Please try again.");
     }
@@ -131,43 +156,73 @@ export function useSession() {
 
   const leaveRoom = useCallback(() => {
     if (state.status !== "active") return;
-    deleteDoc(doc(db, "rooms", "main", "presence", state.user.id)).catch(() => {});
+    const userId = state.user.id;
+
+    // Stop heartbeat
+    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+    // Remove unload handler
+    if (unloadHandlerRef.current) {
+      window.removeEventListener("beforeunload", unloadHandlerRef.current);
+      unloadHandlerRef.current = null;
+    }
+
+    // Soft disconnect — update lastSeen, keep doc alive
+    markOffline(userId);
+
     localStorage.removeItem("onlytwo-user-id");
+    activeUserIdRef.current = null;
     setState({ status: "idle" });
   }, [state]);
 
   return { state, codeError, joinRoom, leaveRoom };
 }
 
-export function usePresence(currentUserId: string | null) {
+// ─── usePresence (with 150ms debounce) ───────────────────────────────────────
+
+export function usePresence(_currentUserId: string | null) {
   const [presence, setPresence] = useState<Record<string, SessionUser>>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef<Record<string, SessionUser>>({});
 
   useEffect(() => {
     const presenceCol = collection(db, "rooms", "main", "presence");
+
     const unsub = onSnapshot(presenceCol, (snap) => {
       const users: Record<string, SessionUser> = {};
       const now = Date.now();
+
       snap.docs.forEach((d) => {
         const data = d.data();
         const ts: number = data.lastSeenTs ?? 0;
         const isStale = now - ts > STALE_MS;
         users[d.id] = {
           id: d.id,
-          name: data.name as string,
+          name: (data.name as string) ?? "Unknown",
           joinedAt: null,
-          online: !isStale && (data.online as boolean),
+          online: !isStale && (data.online === true),
           lastSeen: ts ? new Date(ts) : null,
         };
       });
-      setPresence(users);
+
+      // Debounce: batch rapid Firestore snapshots to prevent UI flicker
+      pendingRef.current = users;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(
+        () => setPresence({ ...pendingRef.current }),
+        PRESENCE_DEBOUNCE_MS
+      );
     });
-    return () => unsub();
-  }, []);
+
+    return () => {
+      unsub();
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []); // stable — presenceCol path never changes
 
   return presence;
 }
 
-import { onSnapshot } from "firebase/firestore";
+// ─── useTypingIndicator ───────────────────────────────────────────────────────
 
 export function useTypingIndicator(roomId: string, userId: string | null) {
   const [isOtherTyping, setIsOtherTyping] = useState(false);
@@ -190,8 +245,7 @@ export function useTypingIndicator(roomId: string, userId: string | null) {
         (snap) => {
           const data = snap.val() as Record<string, boolean> | null;
           if (!data || !userId) { setIsOtherTyping(false); return; }
-          const others = Object.entries(data)
-            .filter(([uid, val]) => uid !== userId && val === true);
+          const others = Object.entries(data).filter(([uid, val]) => uid !== userId && val === true);
           setIsOtherTyping(others.length > 0);
         },
         () => {}
