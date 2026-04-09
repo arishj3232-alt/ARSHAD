@@ -28,7 +28,7 @@ export function useWebRTC(roomId: string, userId: string | null) {
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [isMinimized, setIsMinimized] = useState(false);
-  // Store remote stream in state so effects can bind it reactively
+  // Remote stream in state so effects can reactively bind it to DOM elements
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -36,7 +36,6 @@ export function useWebRTC(roomId: string, userId: string | null) {
   const callDocRef = useRef<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Refs that CallOverlay will bind to its DOM elements
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -80,17 +79,12 @@ export function useWebRTC(roomId: string, userId: string | null) {
   }, []);
 
   const getMedia = useCallback(async (type: CallType): Promise<MediaStream> => {
-    const constraints: MediaStreamConstraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: type === "video"
         ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
         : false,
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    });
     localStreamRef.current = stream;
     if (localVideoRef.current && type === "video") {
       localVideoRef.current.srcObject = stream;
@@ -119,6 +113,7 @@ export function useWebRTC(roomId: string, userId: string | null) {
     };
 
     return pc;
+  // endCall is defined below — ref-stable via useCallback; safe to omit here
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startTimer]);
 
@@ -150,6 +145,11 @@ export function useWebRTC(roomId: string, userId: string | null) {
       const pc = createPeerConnection();
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
+      // Per-call ICE candidate queue.
+      // answerCandidates may arrive before setRemoteDescription(answer) completes.
+      const pendingAnswerCandidates: RTCIceCandidateInit[] = [];
+      let remoteDescSet = false;
+
       const callRef = collection(db, "rooms", roomId, "calls");
       const callDoc = await addDoc(callRef, {
         callerId: userId,
@@ -180,15 +180,37 @@ export function useWebRTC(roomId: string, userId: string | null) {
         }
       };
 
-      // Listen for answer
+      // Listen for answer-side ICE candidates — queue if remote desc not ready yet
+      onSnapshot(
+        collection(db, "rooms", roomId, "calls", callDoc.id, "answerCandidates"),
+        (snap) => {
+          snap.docChanges().forEach((change) => {
+            if (change.type !== "added") return;
+            const candidate = change.doc.data() as RTCIceCandidateInit;
+            if (remoteDescSet) {
+              pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+            } else {
+              pendingAnswerCandidates.push(candidate);
+            }
+          });
+        }
+      );
+
+      // Listen for answer from callee
       const unsubAnswer = onSnapshot(
         doc(db, "rooms", roomId, "calls", callDoc.id),
         async (snap) => {
           const data = snap.data();
           if (!data) return;
-          if (data.answer && pc.signalingState !== "stable" && !pc.currentRemoteDescription) {
+
+          if (data.answer && !pc.currentRemoteDescription) {
             try {
               await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+              // Mark ready and flush queued candidates
+              remoteDescSet = true;
+              for (const cand of pendingAnswerCandidates.splice(0)) {
+                pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+              }
             } catch {}
             unsubAnswer();
           }
@@ -196,20 +218,6 @@ export function useWebRTC(roomId: string, userId: string | null) {
             endCall();
             unsubAnswer();
           }
-        }
-      );
-
-      // Listen for answer ICE candidates
-      onSnapshot(
-        collection(db, "rooms", roomId, "calls", callDoc.id, "answerCandidates"),
-        (snap) => {
-          snap.docChanges().forEach((change) => {
-            if (change.type === "added") {
-              try {
-                pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
-              } catch {}
-            }
-          });
         }
       );
     },
@@ -220,7 +228,6 @@ export function useWebRTC(roomId: string, userId: string | null) {
     async (callId: string) => {
       if (!userId) return;
 
-      // Get call doc
       const snap = await getDocs(collection(db, "rooms", roomId, "calls"));
       const callDocSnap = snap.docs.find((d) => d.id === callId);
       if (!callDocSnap) return;
@@ -240,7 +247,18 @@ export function useWebRTC(roomId: string, userId: string | null) {
       const pc = createPeerConnection();
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
-      await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+      // Per-call ICE queue for offer candidates (from caller)
+      const pendingOfferCandidates: RTCIceCandidateInit[] = [];
+      let remoteDescSet = false;
+
+      // Set remote description from the stored offer
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+        remoteDescSet = true;
+      } catch {
+        setCallStatus("idle");
+        return;
+      }
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -261,21 +279,29 @@ export function useWebRTC(roomId: string, userId: string | null) {
         }
       };
 
-      // Listen for offer ICE candidates
+      // Listen for offer ICE candidates from the caller
       onSnapshot(
         collection(db, "rooms", roomId, "calls", callId, "offerCandidates"),
         (snap) => {
           snap.docChanges().forEach((change) => {
-            if (change.type === "added") {
-              try {
-                pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
-              } catch {}
+            if (change.type !== "added") return;
+            const candidate = change.doc.data() as RTCIceCandidateInit;
+            if (remoteDescSet) {
+              pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+            } else {
+              pendingOfferCandidates.push(candidate);
             }
           });
+          // Flush if we somehow got here before remoteDescSet was marked true
+          if (remoteDescSet && pendingOfferCandidates.length > 0) {
+            for (const cand of pendingOfferCandidates.splice(0)) {
+              pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+            }
+          }
         }
       );
 
-      // Listen for end signal
+      // Listen for end signal from caller
       onSnapshot(doc(db, "rooms", roomId, "calls", callId), (snap) => {
         const data = snap.data();
         if (data?.status === "ended" || data?.status === "rejected") {
@@ -299,7 +325,7 @@ export function useWebRTC(roomId: string, userId: string | null) {
     [roomId]
   );
 
-  // Listen for incoming calls
+  // Incoming call listener
   useEffect(() => {
     if (!userId || !roomId) return;
     const callsRef = collection(db, "rooms", roomId, "calls");
@@ -348,7 +374,6 @@ export function useWebRTC(roomId: string, userId: string | null) {
     const oldTrack = localStreamRef.current.getVideoTracks()[0];
     if (!oldTrack) return;
 
-    // Try facing mode swap first (mobile), then device enumeration (desktop)
     const currentFacing = oldTrack.getSettings().facingMode ?? "user";
     const nextFacing = currentFacing === "user" ? "environment" : "user";
 
@@ -365,7 +390,7 @@ export function useWebRTC(roomId: string, userId: string | null) {
       if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
       oldTrack.stop();
     } catch {
-      // Fallback: enumerate devices
+      // Fallback to device enumeration
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices.filter((d) => d.kind === "videoinput");
       if (cameras.length < 2) return;

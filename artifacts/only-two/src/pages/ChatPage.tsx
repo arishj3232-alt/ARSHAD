@@ -105,14 +105,18 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
   const { settings, updateSetting } = useAdmin();
   const { notify, toasts, showToast, dismissToast } = useNotifications(settings.notificationsEnabled, userId);
   const presence = usePresence(userId);
-  const otherUser = otherId ? presence[otherId] : null;
-  const otherName = otherUser?.name ?? "Them";
+
+  // Derive the other user from live presence — do NOT rely on the null otherId prop
+  const otherUser = Object.values(presence).find((u) => u.id !== userId) ?? null;
+  const resolvedOtherId = otherUser?.id ?? otherId ?? null;
+  const otherName = otherUser?.name
+    ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
 
   const { profile, uploading: dpUploading, toast: dpToast, uploadDp, getDpUrl } = useProfile(userId);
-  const otherDpUrl = otherId ? getDpUrl(otherId) : null;
+  const otherDpUrl = resolvedOtherId ? getDpUrl(resolvedOtherId) : null;
 
   const { setStatus: setMyStatus } = useUserStatus(userId);
-  const otherStatus = useOtherUserStatus(otherId);
+  const otherStatus = useOtherUserStatus(resolvedOtherId);
 
   // Activity status (suppressed in ghost mode)
   useEffect(() => {
@@ -286,7 +290,7 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
           type === "video" ? "🎥 Video" :
           type === "audio" ? "🎤 Voice message" : `Sent a ${type}`;
         notify(otherName, body, type);
-        if (otherId && document.hidden) {
+        if (resolvedOtherId && document.hidden) {
           sendPushNotification({ toUserId: userId, title: otherName, body });
         }
       }

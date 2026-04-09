@@ -41,9 +41,9 @@ type Props = {
   readReceiptsEnabled?: boolean;
 };
 
-/* Waveform bars for audio player */
-const WAVEFORM = [4,7,12,18,22,28,24,16,10,20,30,26,14,8,22,18,12,6,16,24];
+const WAVEFORM = [4, 7, 12, 18, 22, 28, 24, 16, 10, 20, 30, 26, 14, 8, 22, 18, 12, 6, 16, 24];
 
+// ─── Audio player ────────────────────────────────────────────────────────────
 function AudioPlayer({ url }: { url: string }) {
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -82,10 +82,7 @@ function AudioPlayer({ url }: { url: string }) {
         {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
       </button>
       <div className="flex-1">
-        <div
-          className="relative h-8 flex items-end gap-0.5 cursor-pointer"
-          onClick={handleSeek}
-        >
+        <div className="relative h-8 flex items-end gap-0.5 cursor-pointer" onClick={handleSeek}>
           {WAVEFORM.map((h, i) => {
             const pct = ((i + 1) / WAVEFORM.length) * 100;
             return (
@@ -108,109 +105,50 @@ function AudioPlayer({ url }: { url: string }) {
   );
 }
 
-function FullscreenViewer({
-  url,
-  type,
-  onClose,
-}: {
-  url: string;
-  type: "image" | "video";
-  onClose: () => void;
-}) {
+// ─── Fullscreen viewer ───────────────────────────────────────────────────────
+function FullscreenViewer({ url, type, onClose }: { url: string; type: "image" | "video"; onClose: () => void }) {
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center"
-      style={{ animation: "fadeIn 0.2s ease-out" }}
-      onClick={onClose}
-    >
-      <button
-        onClick={onClose}
-        className="absolute top-4 right-4 z-10 p-2.5 rounded-full bg-white/10 hover:bg-white/20 transition text-white"
-      >
+    <div className="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center" style={{ animation: "fadeIn 0.2s ease-out" }} onClick={onClose}>
+      <button onClick={onClose} className="absolute top-4 right-4 z-10 p-2.5 rounded-full bg-white/10 hover:bg-white/20 transition text-white">
         <X className="w-5 h-5" />
       </button>
       {type === "image" ? (
-        <img
-          src={url}
-          alt="Full view"
-          className="max-w-full max-h-full object-contain rounded-xl"
-          style={{ animation: "scaleIn 0.2s ease-out" }}
-          onClick={(e) => e.stopPropagation()}
-        />
+        <img src={url} alt="Full view" className="max-w-full max-h-full object-contain rounded-xl" style={{ animation: "scaleIn 0.2s ease-out" }} onClick={(e) => e.stopPropagation()} />
       ) : (
-        <video
-          src={url}
-          autoPlay
-          controls
-          playsInline
-          className="max-w-full max-h-full rounded-xl"
-          onClick={(e) => e.stopPropagation()}
-        />
+        <video src={url} autoPlay controls playsInline className="max-w-full max-h-full rounded-xl" onClick={(e) => e.stopPropagation()} />
       )}
     </div>
   );
 }
 
-function ViewOnceMedia({
-  message,
-  isOwn,
-  onViewOnce,
-  limitText,
-  showDeleted,
-}: {
-  message: Message;
-  isOwn: boolean;
-  onViewOnce: (id: string) => void;
-  limitText: string;
-  showDeleted: boolean;
+// ─── View-once media ─────────────────────────────────────────────────────────
+function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted }: {
+  message: Message; isOwn: boolean; onViewOnce: (id: string) => void; limitText: string; showDeleted: boolean;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
   const hasStar = limitText.includes("*️⃣");
 
-  // Reveal mode: show original media if available
-  const revealUrl = showDeleted
-    ? (message.originalMediaUrl ?? message.mediaUrl ?? null)
-    : null;
-
-  const handleView = () => {
-    if (isOwn || message.viewOnceViewed) return;
-    setFullscreen(true);
-  };
+  const revealUrl = showDeleted ? (message.originalMediaUrl ?? message.mediaUrl ?? null) : null;
 
   const handleClose = useCallback(() => {
     setFullscreen(false);
     onViewOnce(message.id);
   }, [message.id, onViewOnce]);
 
-  // Reveal mode for non-owner
+  // Reveal mode: show original media even if already viewed
   if (showDeleted && revealUrl && message.viewOnceViewed && !isOwn) {
     return (
       <>
-        {fullscreen && (
-          <FullscreenViewer
-            url={revealUrl}
-            type={message.type as "image" | "video"}
-            onClose={() => setFullscreen(false)}
-          />
-        )}
-        <button
-          onClick={() => setFullscreen(true)}
-          className="relative block rounded-xl overflow-hidden border border-amber-400/30"
-          style={{ maxWidth: 260, maxHeight: 300 }}
-        >
+        {fullscreen && <FullscreenViewer url={revealUrl} type={message.type as "image" | "video"} onClose={() => setFullscreen(false)} />}
+        <button onClick={() => setFullscreen(true)} className="relative block rounded-xl overflow-hidden border border-amber-400/30" style={{ maxWidth: 260, maxHeight: 300 }}>
           {message.type === "image" && (
-            <img
-              src={revealUrl}
-              alt="Revealed"
-              className="max-w-[260px] max-h-[300px] object-cover rounded-xl opacity-80"
-              loading="lazy"
-            />
+            <img src={revealUrl} alt="Revealed" className="max-w-[260px] max-h-[300px] object-cover rounded-xl opacity-80" loading="lazy" />
           )}
           {message.type === "video" && (
             <video src={revealUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
@@ -241,28 +179,17 @@ function ViewOnceMedia({
 
   return (
     <>
-      {fullscreen && message.mediaUrl && (
-        <FullscreenViewer
-          url={message.mediaUrl}
-          type={message.type as "image" | "video"}
-          onClose={handleClose}
-        />
-      )}
+      {fullscreen && message.mediaUrl && <FullscreenViewer url={message.mediaUrl} type={message.type as "image" | "video"} onClose={handleClose} />}
       <button
-        onClick={handleView}
+        onClick={() => { if (!isOwn && !message.viewOnceViewed) setFullscreen(true); }}
         className={cn(
           "flex items-center justify-center gap-2 rounded-xl w-full min-w-[180px] overflow-hidden relative",
           isOwn ? "bg-white/10" : "bg-black border border-white/10"
         )}
         style={{ height: 140 }}
       >
-        {/* Blur preview */}
         {message.mediaUrl && message.type === "image" && !isOwn && (
-          <img
-            src={message.mediaUrl}
-            alt="view once"
-            className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40"
-          />
+          <img src={message.mediaUrl} alt="view once" className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40" />
         )}
         <div className="relative z-10 text-center">
           {isOwn ? (
@@ -287,6 +214,10 @@ function ViewOnceMedia({
     </>
   );
 }
+
+// ─── Main ChatMessage ─────────────────────────────────────────────────────────
+const SWIPE_TRIGGER = 62;   // px to trigger reply
+const SWIPE_MAX    = 110;   // max visual travel
 
 export default function ChatMessage({
   message,
@@ -315,43 +246,102 @@ export default function ChatMessage({
   const [showActions, setShowActions] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
-  const touchStartX = useRef(0);
-  const touchStartY = useRef(0);
+
+  // ── Swipe reply state ──────────────────────────────────────────────────────
+  const swipeContainerRef = useRef<HTMLDivElement>(null);
+  const swipeXRef = useRef(0);         // live offset (not state — no re-renders)
+  const touchStartXRef = useRef(0);
+  const touchStartYRef = useRef(0);
+  const isDraggingRef = useRef(false);
   const lastTapRef = useRef(0);
 
-  const myReaction = message.reactions?.[currentUserId];
-  const allReactions = Object.entries(message.reactions ?? {}).filter(([, v]) => v && v.length > 0);
-  const reactionCounts = allReactions.reduce<Record<string, number>>((acc, [, e]) => {
-    acc[e] = (acc[e] ?? 0) + 1;
-    return acc;
-  }, {});
+  // icon opacity (we drive it via CSS var to avoid React re-renders on every px)
+  const replyIconRef = useRef<HTMLDivElement>(null);
+
+  const applySwipe = (dx: number) => {
+    if (!swipeContainerRef.current) return;
+    swipeXRef.current = dx;
+    swipeContainerRef.current.style.transform = `translateX(${dx}px)`;
+    swipeContainerRef.current.style.transition = "none";
+    if (replyIconRef.current) {
+      const pct = Math.min(dx / SWIPE_TRIGGER, 1);
+      replyIconRef.current.style.opacity = String(pct);
+      replyIconRef.current.style.transform = `scale(${0.5 + 0.5 * pct}) translateX(${dx * 0.35}px)`;
+    }
+  };
+
+  const springBack = () => {
+    if (!swipeContainerRef.current) return;
+    swipeContainerRef.current.style.transition = "transform 0.25s cubic-bezier(0.25,0.8,0.25,1)";
+    swipeContainerRef.current.style.transform = "translateX(0)";
+    swipeXRef.current = 0;
+    if (replyIconRef.current) {
+      replyIconRef.current.style.opacity = "0";
+      replyIconRef.current.style.transform = "scale(0.5) translateX(0)";
+    }
+  };
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
-    touchStartY.current = e.touches[0].clientY;
+    touchStartXRef.current = e.touches[0].clientX;
+    touchStartYRef.current = e.touches[0].clientY;
+    isDraggingRef.current = false;
+    swipeXRef.current = 0;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!repliesEnabled || message.deleted || message.deletedForEveryone) return;
+    const canSwipe = replyMode === "swipe" || replyMode === "both";
+    if (!canSwipe) return;
+
+    const dx = e.touches[0].clientX - touchStartXRef.current;
+    const dy = Math.abs(e.touches[0].clientY - touchStartYRef.current);
+
+    // Swipe must be clearly horizontal
+    if (dy > 20 && !isDraggingRef.current) return;
+    if (dx <= 0) return; // only swipe right
+
+    isDraggingRef.current = true;
+    // Rubber-band: slow down past SWIPE_TRIGGER
+    const travel = dx < SWIPE_TRIGGER
+      ? dx
+      : SWIPE_TRIGGER + (dx - SWIPE_TRIGGER) * 0.3;
+    applySwipe(Math.min(travel, SWIPE_MAX));
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    const dx = e.changedTouches[0].clientX - touchStartX.current;
-    const dy = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
+    const dx = swipeXRef.current;
+    const triggered = isDraggingRef.current && dx >= SWIPE_TRIGGER;
+    springBack();
+    isDraggingRef.current = false;
 
-    const now = Date.now();
-    const timeDiff = now - lastTapRef.current;
-    if (timeDiff < 300 && timeDiff > 0 && Math.abs(dx) < 10 && dy < 10) {
-      if (reactionsEnabled && !message.deleted) {
-        const current = myReaction;
-        if (current === fastReactionEmoji) onReact(message.id, "");
-        else onReact(message.id, fastReactionEmoji);
-      }
-      lastTapRef.current = 0;
+    if (triggered && repliesEnabled && !message.deleted) {
+      onReply(message);
       return;
     }
-    lastTapRef.current = now;
 
-    if (!repliesEnabled || message.deleted) return;
-    const canSwipe = replyMode === "swipe" || replyMode === "both";
-    if (canSwipe && dx > 55 && dy < 40) onReply(message);
+    // Double-tap detection (only if not a swipe)
+    if (!isDraggingRef.current) {
+      const now = Date.now();
+      const diff = now - lastTapRef.current;
+      if (diff < 300 && diff > 0) {
+        if (reactionsEnabled && !message.deleted) {
+          const cur = message.reactions?.[currentUserId];
+          onReact(message.id, cur === fastReactionEmoji ? "" : fastReactionEmoji);
+        }
+        lastTapRef.current = 0;
+        return;
+      }
+      lastTapRef.current = now;
+    }
+
+    // Suppress unused var warning
+    void e;
   };
+
+  const myReaction = message.reactions?.[currentUserId];
+  const reactionCounts = Object.entries(message.reactions ?? {})
+    .filter(([, v]) => v && v.length > 0)
+    .reduce<Record<string, number>>((acc, [, e]) => { acc[e] = (acc[e] ?? 0) + 1; return acc; }, {});
 
   const handleReact = (emoji: string) => {
     if (emoji === myReaction) onReact(message.id, "");
@@ -362,16 +352,15 @@ export default function ChatMessage({
 
   const handleDoubleClick = () => {
     if (reactionsEnabled && !message.deleted) {
-      const current = myReaction;
-      onReact(message.id, current === fastReactionEmoji ? "" : fastReactionEmoji);
+      onReact(message.id, myReaction === fastReactionEmoji ? "" : fastReactionEmoji);
     }
   };
 
   const isDeletedForMe = !!(currentUserId && message.deletedFor?.[currentUserId]);
 
-  // ---- DELETED FOR EVERYONE ----
+  // ── Deleted for everyone ──────────────────────────────────────────────────
   if (message.deleted || message.deletedForEveryone) {
-    // Reveal mode: show original text if available
+    // Reveal mode: show original text
     if (showDeleted && message.originalText) {
       return (
         <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
@@ -401,19 +390,19 @@ export default function ChatMessage({
 
   if (isDeletedForMe) return null;
 
-  // Ghost message styling: if own ghost → dashed violet border, semi-transparent
   const isGhost = message.ghost && isOwn;
 
   return (
     <div
       className={cn(
-        "flex group relative transition-all duration-200",
+        "flex group relative transition-colors duration-200",
         isOwn ? "justify-end" : "justify-start",
         highlighted && "bg-yellow-500/8 rounded-xl px-2"
       )}
       onMouseEnter={() => setShowActions(true)}
       onMouseLeave={() => { setShowActions(false); setShowPicker(false); setShowDeleteMenu(false); }}
       onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onDoubleClick={handleDoubleClick}
     >
@@ -424,9 +413,25 @@ export default function ChatMessage({
         </div>
       )}
 
+      {/* Reply icon (appears on swipe, positioned outside bubble) */}
+      {repliesEnabled && (replyMode === "swipe" || replyMode === "both") && !message.deleted && (
+        <div
+          ref={replyIconRef}
+          className={cn(
+            "absolute top-1/2 -translate-y-1/2 pointer-events-none z-10",
+            isOwn ? "right-full mr-2" : "left-full ml-2"
+          )}
+          style={{ opacity: 0, transform: "scale(0.5) translateX(0)", transition: "none" }}
+        >
+          <div className="w-8 h-8 rounded-full bg-white/15 backdrop-blur-sm flex items-center justify-center">
+            <Reply className="w-4 h-4 text-white/80" />
+          </div>
+        </div>
+      )}
+
       <div className={cn("flex items-end gap-2 max-w-[80%] sm:max-w-[75%]", isOwn && "flex-row-reverse")}>
 
-        {/* Action buttons */}
+        {/* Desktop action buttons */}
         {showActions && !isGhost && (
           <div className={cn(
             "flex flex-col items-center gap-1 mb-1 transition-all duration-150",
@@ -515,21 +520,23 @@ export default function ChatMessage({
           </div>
         )}
 
-        <div className="flex flex-col gap-1">
+        {/* The draggable bubble container */}
+        <div
+          ref={swipeContainerRef}
+          className="flex flex-col gap-1 will-change-transform"
+          style={{ touchAction: "pan-y" }}
+        >
           <div
             className={cn(
               "relative rounded-[20px] overflow-visible",
               isGhost
                 ? "bg-violet-900/20 border border-dashed border-violet-500/40 text-violet-200/80 opacity-70 rounded-br-sm"
-                : message.viewOnce && message.viewOnceViewed && viewOnceLimitText.includes("*️⃣")
-                ? "border border-cyan-400/40 bg-cyan-500/5 shadow-[0_0_12px_rgba(0,255,255,0.15)]"
                 : isOwn
                 ? "bg-gradient-to-br from-pink-500 to-violet-600 text-white rounded-br-sm shadow-lg shadow-pink-500/20"
                 : "bg-white/8 backdrop-blur-sm border border-white/10 text-white rounded-bl-sm"
             )}
             style={{ animation: "msgFadeIn 0.2s ease-out" }}
           >
-            {/* Ghost indicator chip */}
             {isGhost && (
               <div className="absolute -top-2 -right-1 text-[9px] bg-violet-900/80 border border-violet-500/30 text-violet-300/70 rounded-full px-1.5 py-0.5 z-10">
                 👻
@@ -552,6 +559,7 @@ export default function ChatMessage({
               {message.type === "text" && message.text && (
                 <TextWithLinks text={message.text} isOwn={isOwn} />
               )}
+
               {(message.type === "image" || message.type === "video") && message.viewOnce ? (
                 <ViewOnceMedia
                   message={message}
@@ -573,26 +581,18 @@ export default function ChatMessage({
                     </a>
                   )}
                   {message.type === "video" && message.mediaUrl && (
-                    <video
-                      src={message.mediaUrl}
-                      controls
-                      className="max-w-[260px] max-h-[300px] rounded-xl"
-                      playsInline
-                    />
+                    <video src={message.mediaUrl} controls className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
                   )}
                 </>
               )}
+
               {message.type === "audio" && message.mediaUrl && (
                 <AudioPlayer url={message.mediaUrl} />
               )}
 
               <div className={cn("flex items-center gap-1.5 mt-1", isOwn ? "justify-end" : "justify-start")}>
-                {message.edited && (
-                  <span className="text-[9px] opacity-35 italic">edited</span>
-                )}
-                {isGhost && (
-                  <span className="text-[9px] text-violet-400/50 italic">ghost</span>
-                )}
+                {message.edited && <span className="text-[9px] opacity-35 italic">edited</span>}
+                {isGhost && <span className="text-[9px] text-violet-400/50 italic">ghost</span>}
                 <span className="text-[10px] opacity-40">{formatTime(message.createdAt)}</span>
                 {isOwn && !isGhost && (
                   <span className="opacity-50">
@@ -638,18 +638,9 @@ export default function ChatMessage({
           from { opacity: 0; transform: translateY(6px) scale(0.97); }
           to { opacity: 1; transform: translateY(0) scale(1); }
         }
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        @keyframes scaleIn {
-          from { transform: scale(0.9); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
-        }
-        @keyframes reactionPop {
-          from { transform: scale(0.7); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
-        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        @keyframes reactionPop { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       `}</style>
     </div>
   );

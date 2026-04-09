@@ -1,0 +1,293 @@
+Fix, refactor, and stabilize the entire real-time chat + calling application to production-level quality. Address all functional bugs, race conditions, UI inconsistencies, and synchronization issues.
+
+---
+
+## CORE OBJECTIVE
+
+Build a fully stable system with:
+
+* Real-time messaging
+* Working WebRTC voice/video calls
+* Accurate presence + typing system
+* Correct feature toggles (ghost, reveal, read receipts)
+* Proper media lifecycle (view-once, deleted media)
+* Clean identity system (username + DP)
+* Smooth mobile UX (swipe reply, no flicker)
+
+---
+
+1. USER IDENTITY + HEADER FIX (CRITICAL)
+
+---
+
+* Use socket.id as unique identifier for each user
+* Emit "your-id" from server on connection
+* Store myId in frontend
+* Identify other user using:
+  user.id !== myId (NOT name comparison)
+
+Fix UI:
+
+* Replace "Them" with actual username
+* Show DP on left side
+* Fallback to first letter if no DP
+* Show:
+
+  * "🟢 Online"
+  * "Typing..."
+  * "Last seen {time}"
+  * "Connecting..." if not ready
+
+---
+
+2. REAL-TIME PRESENCE SYSTEM
+
+---
+
+Backend:
+
+* Maintain users store:
+  { id, name, room, status, lastSeen, dp }
+
+* On join:
+  status = "online"
+  emit "presence-update"
+
+* On disconnect:
+  DO NOT delete user
+  status = "offline"
+  lastSeen = Date.now()
+
+Frontend:
+
+* Listen to presence-update
+* Debounce updates to prevent flicker
+
+---
+
+3. TYPING + STATUS STATES
+
+---
+
+* Emit "typing" with throttle
+* Emit "stop-typing" after 1.5s inactivity
+* Avoid socket spam
+
+Add states:
+
+* online
+* offline
+* viewing
+* recording
+* browsing
+
+Sync via socket and display with icons
+
+---
+
+4. WEBRTC (VOICE + VIDEO — FULL FIX)
+
+---
+
+Fix entire WebRTC flow:
+
+* getUserMedia({ audio: true, video })
+* Add tracks via addTrack()
+* Handle peerConnection.ontrack
+
+CRITICAL FIXES:
+
+* Store remote stream in state (avoid race condition)
+* Attach stream via useEffect after DOM mounts
+
+Audio fix:
+
+* Always render hidden <audio autoPlay>
+* Assign remote stream to audio element
+
+Autoplay fix:
+
+* Trigger audio.play() after user interaction
+
+ICE FIX:
+
+* Queue ICE candidates if remoteDescription not set
+* Flush queue after setting remoteDescription
+
+Video fix:
+
+* Ensure <video autoplay playsInline> exists
+* Bind remote stream correctly
+
+Camera flip:
+
+* Use replaceTrack()
+* Toggle facingMode: "user" ↔ "environment"
+
+---
+
+5. ONE-TIME MEDIA FIX
+
+---
+
+* On open:
+  emit "view-once-opened"
+* Mark:
+  viewed = true
+  remove or invalidate media URL
+
+UI:
+
+* If viewed → show "Expired"
+* Prevent reload access
+
+---
+
+6. REVEAL MODE (GLOBAL + SECURE)
+
+---
+
+* Show ALL deleted messages (not just own)
+* Remove 8-second timeout → make toggle persistent
+* Store messages as:
+  { deleted: true, hidden: true }
+
+SECURITY FIX:
+
+* Remove public media URL after deletion
+* Store backup securely (server-side only)
+
+Frontend:
+
+* If revealMode ON → show deleted messages + media
+
+---
+
+7. GHOST MODE + FEATURE FLAGS
+
+---
+
+Fix dynamic keyword system:
+
+Format:
+off + first 2 letters of keyword (case-insensitive)
+
+Examples:
+offbh → ghost off
+offbe → reveal off
+offon → read receipt off
+
+Special case:
+If keyword = "nun" → offnu
+
+Ensure:
+
+* ghostMode
+* revealMode
+* readReceipt
+  are centrally managed and synced
+
+---
+
+8. SWIPE REPLY (MOBILE UX)
+
+---
+
+* Detect touch swipe
+* Trigger reply if 60px < swipe < 120px
+* Add smooth transform animation
+* Reset if cancelled
+
+---
+
+9. ADMIN DEVICE CONTROL
+
+---
+
+* Admin can remove users
+* Use RTDB: forceLogout/{userId}
+
+Client:
+
+* Listen for flag
+* CLEAR flag BEFORE logout
+* Call leaveRoom() (not just reload)
+
+---
+
+10. PROFILE (DP) SYSTEM
+
+---
+
+* Store DP with user
+* Display in header
+
+Prevent duplicate DP:
+
+* Use browser crypto.subtle (NOT Node crypto)
+* Hash file and compare with previous
+
+---
+
+11. MESSAGE STRUCTURE (STANDARDIZE)
+
+---
+
+Use:
+
+{
+id,
+text,
+mediaUrl,
+viewed,
+deleted,
+deletedForEveryone,
+hidden,
+senderId,
+timestamp
+}
+
+---
+
+12. SOCKET + STATE STABILITY
+
+---
+
+* All state changes via socket events
+* No local-only critical state
+* Clean up listeners on unmount
+* Prevent duplicate listeners
+* Avoid race conditions
+
+---
+
+13. UX + PERFORMANCE FIXES
+
+---
+
+* Debounce presence updates
+* Prevent UI flicker
+* Handle loading state ("Connecting...")
+* Ensure smooth transitions
+
+---
+
+## FINAL EXPECTATION
+
+After implementation:
+
+✔ Voice calls fully working
+✔ Video calls show both users
+✔ Audio never drops
+✔ Camera flip works
+✔ One-time media truly disappears
+✔ Reveal mode shows ALL deleted content
+✔ Ghost mode toggles correctly
+✔ Typing indicator works smoothly
+✔ Online / last seen updates correctly
+✔ Username + DP display properly (no "Them")
+✔ Swipe reply works like WhatsApp
+✔ Admin can remove devices safely
+✔ No race conditions or silent failures
+
+Focus on real-time synchronization, stability, and clean architecture.
