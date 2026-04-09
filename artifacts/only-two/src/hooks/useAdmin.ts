@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { ref, onValue, set } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
+export type ReplyMode = "tap" | "swipe" | "both";
+
 export type AdminSettings = {
   messagingEnabled: boolean;
   repliesEnabled: boolean;
@@ -17,6 +19,12 @@ export type AdminSettings = {
   lastSeenEnabled: boolean;
   cursorPresenceEnabled: boolean;
   notificationsEnabled: boolean;
+  reactionEmojis: string[];
+  fastReactionEmoji: string;
+  replyMode: ReplyMode;
+  deletedText: string;
+  viewOnceLimitText: string;
+  adminKeyword: string;
 };
 
 export const DEFAULT_SETTINGS: AdminSettings = {
@@ -34,6 +42,12 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   lastSeenEnabled: true,
   cursorPresenceEnabled: true,
   notificationsEnabled: true,
+  reactionEmojis: ["❤️", "😂", "👍", "😮", "🔥"],
+  fastReactionEmoji: "❤️",
+  replyMode: "both",
+  deletedText: "This message was deleted",
+  viewOnceLimitText: "This image has reached its limit",
+  adminKeyword: "laura",
 };
 
 export function useAdmin() {
@@ -46,18 +60,26 @@ export function useAdmin() {
         settingsRef,
         (snap) => {
           const data = snap.val();
-          if (data) setSettings({ ...DEFAULT_SETTINGS, ...data });
+          if (data) {
+            setSettings({
+              ...DEFAULT_SETTINGS,
+              ...data,
+              reactionEmojis: Array.isArray(data.reactionEmojis)
+                ? data.reactionEmojis
+                : DEFAULT_SETTINGS.reactionEmojis,
+            });
+          }
         },
         () => {}
       );
       return () => unsub();
     } catch {
-      // RTDB unavailable — use defaults
+      // RTDB unavailable
     }
   }, []);
 
   const updateSetting = useCallback(
-    async (key: keyof AdminSettings, value: boolean) => {
+    async <K extends keyof AdminSettings>(key: K, value: AdminSettings[K]) => {
       const next = { ...settings, [key]: value };
       setSettings(next);
       try {

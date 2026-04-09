@@ -11,6 +11,7 @@ import {
   serverTimestamp,
   startAfter,
   getDocs,
+  deleteField,
   DocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -26,9 +27,12 @@ export type Message = {
   replyToId?: string;
   replyToText?: string;
   deleted: boolean;
+  deletedForEveryone?: boolean;
+  deletedFor?: Record<string, boolean>;
   seen: boolean;
   delivered: boolean;
   viewOnce?: boolean;
+  viewOnceViewed?: boolean;
   reactions?: Record<string, string>;
   createdAt: Date | null;
 };
@@ -46,10 +50,17 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     replyToId: data.replyToId as string | undefined,
     replyToText: data.replyToText as string | undefined,
     deleted: (data.deleted as boolean) ?? false,
+    deletedForEveryone: (data.deletedForEveryone as boolean) ?? false,
+    deletedFor: (data.deletedFor as Record<string, boolean>) ?? {},
     seen: (data.seen as boolean) ?? false,
     delivered: (data.delivered as boolean) ?? false,
     viewOnce: (data.viewOnce as boolean) ?? false,
-    reactions: (data.reactions as Record<string, string>) ?? {},
+    viewOnceViewed: (data.viewOnceViewed as boolean) ?? false,
+    reactions: Object.fromEntries(
+      Object.entries((data.reactions as Record<string, string>) ?? {}).filter(
+        ([, v]) => v && typeof v === "string" && v.length > 0
+      )
+    ),
     createdAt: (data.createdAt as { toDate: () => Date } | null)?.toDate() ?? null,
   };
 }
@@ -118,9 +129,12 @@ export function useMessages(roomId: string, currentUserId: string | null) {
         replyToId: payload.replyToId ?? null,
         replyToText: payload.replyToText ?? null,
         deleted: false,
+        deletedForEveryone: false,
+        deletedFor: {},
         seen: false,
         delivered: true,
         viewOnce: payload.viewOnce ?? false,
+        viewOnceViewed: false,
         reactions: {},
         createdAt: serverTimestamp(),
       });
@@ -128,13 +142,32 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     [roomId, currentUserId]
   );
 
-  const deleteMessage = useCallback(
+  // Delete for me: hides message only for current user
+  const deleteForMe = useCallback(
     async (messageId: string) => {
+      if (!currentUserId) return;
       const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { deleted: true });
+      await updateDoc(r, { [`deletedFor.${currentUserId}`]: true });
+    },
+    [roomId, currentUserId]
+  );
+
+  // Delete for everyone: marks as globally deleted with configurable text
+  const deleteForEveryone = useCallback(
+    async (messageId: string, deletedText = "This message was deleted") => {
+      const r = doc(db, "rooms", roomId, "messages", messageId);
+      await updateDoc(r, {
+        deleted: true,
+        deletedForEveryone: true,
+        text: deletedText,
+        mediaUrl: null,
+      });
     },
     [roomId]
   );
+
+  // Legacy single delete (kept for compatibility)
+  const deleteMessage = deleteForEveryone;
 
   const markSeen = useCallback(
     async (messageId: string) => {
@@ -154,19 +187,21 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     [roomId, currentUserId]
   );
 
+  // Use deleteField() to fully remove the key — prevents null/undefined display
   const removeReaction = useCallback(
     async (messageId: string) => {
       if (!currentUserId) return;
       const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { [`reactions.${currentUserId}`]: null });
+      await updateDoc(r, { [`reactions.${currentUserId}`]: deleteField() });
     },
     [roomId, currentUserId]
   );
 
+  // Mark view-once as viewed — message stays but media is locked
   const markViewOnceViewed = useCallback(
     async (messageId: string) => {
       const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { deleted: true });
+      await updateDoc(r, { viewOnceViewed: true });
     },
     [roomId]
   );
@@ -176,10 +211,14 @@ export function useMessages(roomId: string, currentUserId: string | null) {
       if (!searchText.trim()) return [];
       const lower = searchText.toLowerCase();
       return messages.filter(
-        (m) => !m.deleted && m.type === "text" && m.text?.toLowerCase().includes(lower)
+        (m) =>
+          !m.deleted &&
+          !(currentUserId && m.deletedFor?.[currentUserId]) &&
+          m.type === "text" &&
+          m.text?.toLowerCase().includes(lower)
       );
     },
-    [messages]
+    [messages, currentUserId]
   );
 
   return {
@@ -190,6 +229,8 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     loadMore,
     sendMessage,
     deleteMessage,
+    deleteForMe,
+    deleteForEveryone,
     markSeen,
     addReaction,
     removeReaction,

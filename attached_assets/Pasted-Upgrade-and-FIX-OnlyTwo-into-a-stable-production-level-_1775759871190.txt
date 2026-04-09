@@ -1,0 +1,240 @@
+Upgrade and FIX OnlyTwo into a stable, production-level messaging app.
+
+CRITICAL:
+
+* Fix all existing bugs first
+* Do NOT break current working features
+* Follow WhatsApp-like behavior exactly where mentioned
+
+==================================================
+🚨 1. PROFILE DP SYSTEM (WITH DUPLICATE BLOCK)
+==============================================
+
+* Allow users to upload profile picture (DP)
+* Store image hash (or file signature)
+* Prevent uploading SAME image again
+
+IF duplicate:
+→ show toast: "This image is already used"
+
+* Save DP in Cloudinary
+* Show DP in:
+
+  * header
+  * messages (avatar)
+
+==================================================
+🐛 2. REACTION BUG FIX (NULL / NULL2 ISSUE)
+===========================================
+
+FIX reaction system completely:
+
+Problem:
+
+* After react/unreact → showing "null" or "null2"
+
+Solution:
+
+* Store reactions like:
+  reactions: {
+  userId: "❤️"
+  }
+
+* On unreact:
+  → REMOVE the userId key (NOT set null)
+
+* On change emoji:
+  → overwrite value (NOT append)
+
+* Ensure UI never renders null values
+
+==================================================
+🗑️ 3. DELETE SYSTEM (WHATSAPP LOGIC)
+=====================================
+
+Add two options:
+
+1. Delete for me
+   → remove message ONLY for current user
+
+2. Delete for everyone
+   → update message:
+   text: "This message was deleted"
+   deleted: true
+   deletedForEveryone: true
+
+* Sync instantly for both users
+
+==================================================
+↩️ 4. REPLY SYSTEM MODES (ADMIN CONTROL)
+========================================
+
+Two modes:
+
+1. Tap + Reply button
+2. Swipe to reply
+
+Admin Panel:
+→ toggle:
+replyMode = "tap" | "swipe" | "both"
+
+UI adapts based on setting
+
+==================================================
+😀 5. ADMIN-CONTROLLED REACTIONS
+================================
+
+Admin can:
+
+* Add/remove reaction emojis
+* Example:
+  ["❤️","😂","🔥","😮","👍"]
+
+UI updates dynamically
+
+==================================================
+⚡ 6. DOUBLE TAP FAST REACTION
+=============================
+
+Admin setting:
+→ fastReactionEmoji
+
+Double tap message:
+→ instantly reacts with selected emoji
+
+==================================================
+📱 7. MOBILE UI FIX (CRITICAL)
+==============================
+
+Fix Android issue:
+
+Problem:
+→ input box going under navigation bar
+
+Solution:
+
+* Add:
+  padding-bottom: env(safe-area-inset-bottom)
+
+* Use:
+  position: sticky bottom: 0
+
+* Ensure:
+
+  * keyboard-safe layout
+  * no overflow hidden issues
+
+==================================================
+👁️ 8. ONE-TIME VIEW (WHATSAPP EXACT BEHAVIOR)
+==============================================
+
+Current issue: auto-delete after timer ❌
+
+FIX:
+
+* Message shows:
+  → "Tap to view"
+
+* On open:
+  → FULLSCREEN image/video
+
+* On close:
+  → permanently locked
+
+Replace message with:
+→ "This image has reached its limit"
+
+NO timers
+
+==================================================
+✨ 9. SPECIAL CYAN HIGHLIGHT SYSTEM
+==================================
+
+If message contains "*️⃣":
+
+Apply premium CYAN glow style for:
+
+* Deleted for everyone messages
+* One-time view messages
+
+Style:
+
+* cyan border
+* soft glow
+* different from normal bubbles
+
+==================================================
+🛠️ 10. ADMIN CUSTOM TEXT SYSTEM
+================================
+
+Admin can change:
+
+* "This message was deleted"
+* "This image has reached its limit"
+* Admin keyword (default: laura)
+
+==================================================
+📱 11. DEVICE MANAGEMENT
+========================
+
+Admin panel shows:
+
+* Logged-in devices:
+
+  * device type
+  * browser
+  * last active
+
+==================================================
+🐛 12. TYPING BUG FIX
+=====================
+
+Problem:
+→ typing shows even when not typing
+
+Fix:
+
+* Use debounce (1–2 sec)
+* Auto-clear typing state after inactivity
+
+==================================================
+📶 13. LAST SEEN / ONLINE FIX
+=============================
+
+Fix incorrect states:
+
+* Online → green
+* Offline → last seen timestamp
+* Typing should NEVER override last seen incorrectly
+
+==================================================
+🎨 14. STATUS COLOR SYSTEM (REAL-TIME)
+======================================
+
+Bubble / header indicators:
+
+* 🟢 Green → active
+* 🔴 Red → offline / last seen
+* 🟡 Gold → viewing media
+* 🔵 Blue → recording voice
+* ⚪ White → browsing media/search
+
+==================================================
+🎯 FINAL GOAL
+=============
+
+Fix ALL bugs:
+
+* null reactions
+* mobile layout break
+* wrong presence
+* broken one-time view
+* missing delete system
+
+Upgrade UX to:
+→ WhatsApp-level stability
+→ Premium SaaS feel
+→ Mobile-first perfection
+
+DO NOT skip anything.
+Implement fully.
