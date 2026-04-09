@@ -3,10 +3,14 @@ import EntryPage from "@/pages/EntryPage";
 import ChatPage from "@/pages/ChatPage";
 
 export default function App() {
-  const { state, joinRoom, codeError } = useSession();
+  const { state, joinRoom, leaveRoom, codeError } = useSession();
 
   const handleJoin = async (code: string, name: string) => {
     await joinRoom(code, name);
+  };
+
+  const handleForceLogout = () => {
+    leaveRoom();
   };
 
   if (state.status === "active") {
@@ -15,6 +19,7 @@ export default function App() {
         userId={state.user.id}
         userName={state.user.name}
         otherId={state.otherId}
+        onForceLogout={handleForceLogout}
       />
     );
   }

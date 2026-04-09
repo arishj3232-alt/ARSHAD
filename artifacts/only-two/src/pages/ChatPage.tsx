@@ -24,7 +24,7 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
-import { ref, set } from "firebase/database";
+import { ref, set, onValue } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import { cn, formatDate, formatLastSeen } from "@/lib/utils";
 import { useMessages } from "@/hooks/useMessages";
@@ -57,6 +57,7 @@ type Props = {
   userId: string;
   userName: string;
   otherId: string | null;
+  onForceLogout?: () => void;
 };
 
 type InputMode = "text" | "voice" | "videonote";
@@ -69,7 +70,12 @@ const STATUS_DOT: Record<string, { color: string; label: string }> = {
   offline: { color: "bg-white/20", label: "" },
 };
 
-export default function ChatPage({ userId, userName, otherId }: Props) {
+// Compute "off" keyword from any keyword string — "off" + first 2 chars (lowercase)
+function offKeyword(keyword: string): string {
+  return "off" + keyword.slice(0, 2).toLowerCase();
+}
+
+export default function ChatPage({ userId, userName, otherId, onForceLogout }: Props) {
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editingMsg, setEditingMsg] = useState<Message | null>(null);
@@ -83,9 +89,8 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
 
   // --- Command-driven states ---
   const [ghostMode, setGhostMode] = useState(false);
-  const [showDeleted, setShowDeleted] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false); // persistent toggle
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true);
-  const revealTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -109,7 +114,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   const { setStatus: setMyStatus } = useUserStatus(userId);
   const otherStatus = useOtherUserStatus(otherId);
 
-  // Update activity status (suppress in ghost mode)
+  // Activity status (suppressed in ghost mode)
   useEffect(() => {
     if (ghostMode) return;
     if (inputMode === "voice") setMyStatus("recording");
@@ -117,6 +122,27 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     else if (panel === "search") setMyStatus("browsing");
     else setMyStatus("online");
   }, [inputMode, panel, setMyStatus, ghostMode]);
+
+  // Force-logout listener
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      const unsub = onValue(
+        ref(rtdb, `forceLogout/${userId}`),
+        (snap) => {
+          if (snap.val() === true) {
+            set(ref(rtdb, `forceLogout/${userId}`), null).catch(() => {});
+            localStorage.removeItem("onlytwo-user-id");
+            localStorage.removeItem("onlytwo-user-name");
+            if (onForceLogout) onForceLogout();
+            else window.location.reload();
+          }
+        },
+        () => {}
+      );
+      return () => unsub();
+    } catch {}
+  }, [userId, onForceLogout]);
 
   // Device registration
   useEffect(() => {
@@ -135,6 +161,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
         platform: navigator.platform || "Unknown",
         lastActive: Date.now(),
         online: true,
+        userId,
       }).catch(() => {});
     } catch {}
   }, [userId]);
@@ -165,29 +192,52 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
 
   const {
     callStatus, callType, isMuted, isCameraOff, callDuration,
-    isMinimized, setIsMinimized, localVideoRef, remoteVideoRef,
+    isMinimized, setIsMinimized, localVideoRef, remoteVideoRef, remoteAudioRef,
     startCall, answerCall, endCall, rejectCall, toggleMute, toggleCamera,
     switchCamera, incomingCallId,
   } = useWebRTC(ROOM_ID, userId);
 
   // ============================================================
-  // CENTRALIZED KEYWORD DETECTION ENGINE
-  // All comparisons are trimmed & case-sensitive per admin config
+  // CENTRALIZED KEYWORD ENGINE
   // ============================================================
   const triggerKeyword = useCallback(
     (input: string): boolean => {
       const trimmed = input.trim();
+      const lower = trimmed.toLowerCase();
 
+      // --- OFF keywords (off + first 2 chars of keyword, case-insensitive) ---
+      if (lower === offKeyword(settings.revealKeyword) && settings.allowReadReceiptToggle) {
+        setShowDeleted(false);
+        showToast({ title: "🔍 Reveal Mode off", body: "Back to normal view", type: "text" });
+        return true;
+      }
+      if (lower === offKeyword(settings.ghostKeyword) && settings.allowGhostMode) {
+        setGhostMode(false);
+        showToast({ title: "Ghost Mode off", body: "You're visible again", type: "text" });
+        return true;
+      }
+      if (lower === offKeyword(settings.readReceiptKeyword) && settings.allowReadReceiptToggle) {
+        setReadReceiptsEnabled(false);
+        showToast({ title: "🙈 Read receipts disabled", body: "Blue ticks hidden", type: "text" });
+        return true;
+      }
+
+      // --- ON keywords (exact match, case-sensitive as admin configured) ---
       if (trimmed === settings.adminKeyword) {
         setShowAdmin(true);
         return true;
       }
 
       if (trimmed === settings.revealKeyword) {
-        setShowDeleted(true);
-        showToast({ title: "🔍 Reveal Mode", body: "Deleted content visible for 8 seconds", type: "text" });
-        if (revealTimeoutRef.current) clearTimeout(revealTimeoutRef.current);
-        revealTimeoutRef.current = setTimeout(() => setShowDeleted(false), 8000);
+        setShowDeleted((prev) => {
+          const next = !prev;
+          showToast({
+            title: next ? "🔍 Reveal Mode on" : "🔍 Reveal Mode off",
+            body: next ? "Deleted & hidden content is visible" : "Back to normal view",
+            type: "text",
+          });
+          return next;
+        });
         return true;
       }
 
@@ -195,8 +245,8 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
         setGhostMode((prev) => {
           const next = !prev;
           showToast({
-            title: next ? "👻 Ghost Mode Enabled" : "Ghost Mode Disabled",
-            body: next ? "Your messages are invisible to them" : "Back to normal mode",
+            title: next ? "👻 Ghost Mode on" : "Ghost Mode off",
+            body: next ? "Your messages are invisible to them" : "You're visible again",
             type: "text",
           });
           return next;
@@ -208,8 +258,8 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
         setReadReceiptsEnabled((prev) => {
           const next = !prev;
           showToast({
-            title: next ? "👁️ Read receipts enabled" : "🙈 Read receipts disabled",
-            body: next ? "Blue ticks are visible" : "Blue ticks are hidden",
+            title: next ? "👁️ Read receipts on" : "🙈 Read receipts off",
+            body: next ? "Blue ticks are visible" : "Blue ticks hidden",
             type: "text",
           });
           return next;
@@ -222,7 +272,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     [settings, showToast]
   );
 
-  // Notifications: foreground toast + background push (skip in ghost mode)
+  // Incoming message notifications
   useEffect(() => {
     const prev = prevMessageCountRef.current;
     const curr = messages.length;
@@ -244,18 +294,11 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     prevMessageCountRef.current = curr;
   }, [messages, userId, otherName, otherId, notify]);
 
-  // Keyboard shortcuts (Ctrl+Shift+S for admin)
+  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === "S") {
-        e.preventDefault();
-        setShowAdmin((p) => !p);
-      }
-      if (e.key === "Escape") {
-        setShowAttachMenu(false);
-        setShowAdmin(false);
-        setEditingMsg(null);
-      }
+      if (e.ctrlKey && e.shiftKey && e.key === "S") { e.preventDefault(); setShowAdmin((p) => !p); }
+      if (e.key === "Escape") { setShowAttachMenu(false); setShowAdmin(false); setEditingMsg(null); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -268,7 +311,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   useEffect(() => { scrollToBottom(false); }, [loading]);
   useEffect(() => { if (messages.length > 0) scrollToBottom(); }, [messages.length]);
 
-  // Mark seen — only when read receipts enabled and not in ghost mode
+  // Mark seen (skipped in ghost mode / when read receipts off)
   useEffect(() => {
     if (!readReceiptsEnabled || ghostMode) return;
     const unseenFromOther = messages.filter((m) => m.senderId !== userId && !m.seen && !m.deleted && !m.ghost);
@@ -292,7 +335,6 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     const t = text.trim();
     if (!t) return;
 
-    // Keyword check — absorb if triggered
     if (triggerKeyword(t)) {
       setText("");
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -332,18 +374,13 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
       if (editingMsg) handleEditSubmit();
       else handleSendText();
     }
-    if (e.key === "Escape" && editingMsg) {
-      setEditingMsg(null);
-      setEditText("");
-    }
+    if (e.key === "Escape" && editingMsg) { setEditingMsg(null); setEditText(""); }
   };
 
   const handleTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     if (editingMsg) { setEditText(val); return; }
     setText(val);
-
-    // Typing indicator — suppress in ghost mode
     if (settings.typingIndicatorEnabled && !ghostMode) {
       if (val.length > 0) {
         setTyping(true);
@@ -420,7 +457,6 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     const groups: { date: string; msgs: Message[] }[] = [];
     let currentDate = "";
     messages.forEach((msg) => {
-      // Filter out other user's ghost messages
       if (msg.ghost && msg.senderId !== userId) return;
       const d = msg.createdAt ? formatDate(msg.createdAt) : "Today";
       if (d !== currentDate) { groups.push({ date: d, msgs: [] }); currentDate = d; }
@@ -434,17 +470,14 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   const activeValue = editingMsg ? editText : text;
 
   return (
-    <div
-      className="flex bg-[#080810] overflow-hidden"
-      style={{ height: "100dvh", userSelect: "none" }}
-    >
+    <div className="flex bg-[#080810] overflow-hidden" style={{ height: "100dvh", userSelect: "none" }}>
       {showCursors && <CursorPresence cursors={otherCursors} />}
 
       {showAdmin && (
-        <AdminPanel settings={settings} onUpdate={updateSetting} onClose={() => setShowAdmin(false)} />
+        <AdminPanel settings={settings} onUpdate={updateSetting} onClose={() => setShowAdmin(false)} currentUserId={userId} />
       )}
 
-      {/* In-app toast notifications */}
+      {/* In-app toasts */}
       <div className="fixed top-4 right-4 z-[400] flex flex-col gap-2 pointer-events-none">
         {toasts.map((toast) => (
           <div
@@ -454,35 +487,29 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
           >
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center flex-shrink-0">
               <span className="text-sm">
-                {toast.type === "image" ? "📸" :
-                 toast.type === "video" ? "🎥" :
-                 toast.type === "audio" ? "🎤" :
-                 toast.type === "call" ? "📞" : "💬"}
+                {toast.type === "image" ? "📸" : toast.type === "video" ? "🎥" : toast.type === "audio" ? "🎤" : toast.type === "call" ? "📞" : "💬"}
               </span>
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-white font-semibold text-sm leading-tight">{toast.title}</p>
               <p className="text-white/50 text-xs mt-0.5 truncate">{toast.body}</p>
             </div>
-            <button
-              onClick={() => dismissToast(toast.id)}
-              className="text-white/30 hover:text-white/60 transition flex-shrink-0 mt-0.5"
-            >
+            <button onClick={() => dismissToast(toast.id)} className="text-white/30 hover:text-white/60 transition flex-shrink-0 mt-0.5">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
         ))}
       </div>
 
-      {/* Reveal mode banner */}
+      {/* Reveal mode indicator */}
       {showDeleted && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[300] flex items-center gap-2 px-4 py-2.5 bg-amber-500/15 border border-amber-500/30 rounded-2xl text-amber-300 text-sm shadow-xl backdrop-blur-xl" style={{ animation: "toastIn 0.2s ease-out" }}>
           <Eye className="w-4 h-4" />
-          <span>Reveal Mode · 8s</span>
+          <span>Reveal Mode active</span>
         </div>
       )}
 
-      {/* Ghost mode banner */}
+      {/* Ghost mode indicator */}
       {ghostMode && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[290] flex items-center gap-2 px-4 py-2.5 bg-violet-500/15 border border-violet-500/30 rounded-2xl text-violet-300 text-sm shadow-xl backdrop-blur-xl" style={{ marginTop: showDeleted ? "3.5rem" : "0", animation: "toastIn 0.2s ease-out" }}>
           <Ghost className="w-4 h-4" />
@@ -492,7 +519,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
 
       {/* DP toast */}
       {dpToast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[300] px-4 py-2.5 bg-[#1a1a2e] border border-white/10 rounded-2xl text-white/80 text-sm shadow-xl" style={{ animation: "toastIn 0.2s ease-out" }}>
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[300] px-4 py-2.5 bg-[#1a1a2e] border border-white/10 rounded-2xl text-white/80 text-sm shadow-xl" style={{ animation: "toastIn 0.2s ease-out" }}>
           {dpToast}
         </div>
       )}
@@ -508,10 +535,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 <span className="text-white font-bold text-sm">{otherName[0]?.toUpperCase() ?? "?"}</span>
               )}
             </div>
-            <div
-              className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)}
-              title={statusDot.label}
-            />
+            <div className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)} title={statusDot.label} />
           </div>
 
           <div className="flex-1 min-w-0">
@@ -531,27 +555,16 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
             </p>
           </div>
 
-          {/* Read receipt status indicator */}
           {!readReceiptsEnabled && (
             <div title="Read receipts off" className="text-white/20 flex-shrink-0">
               <EyeOff className="w-4 h-4" />
             </div>
           )}
 
-          {/* Own DP with upload */}
+          {/* Own DP */}
           <div className="relative mr-1">
-            <input
-              ref={dpInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }}
-            />
-            <button
-              onClick={() => dpInputRef.current?.click()}
-              className="w-7 h-7 rounded-full overflow-hidden bg-gradient-to-br from-violet-500 to-pink-600 flex items-center justify-center shadow relative group"
-              title="Tap to change profile picture"
-            >
+            <input ref={dpInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }} />
+            <button onClick={() => dpInputRef.current?.click()} className="w-7 h-7 rounded-full overflow-hidden bg-gradient-to-br from-violet-500 to-pink-600 flex items-center justify-center shadow relative group" title="Tap to change profile picture">
               {profile.dpUrl ? (
                 <img src={profile.dpUrl} alt="You" className="w-full h-full object-cover" />
               ) : (
@@ -561,28 +574,14 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 <Camera className="w-3 h-3 text-white" />
               </div>
             </button>
-            {dpUploading && (
-              <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin" />
-            )}
+            {dpUploading && <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin" />}
           </div>
 
           <div className="flex items-center gap-0.5">
-            <HeaderBtn onClick={() => setPanel(panel === "search" ? "none" : "search")} active={panel === "search"} testId="button-search">
-              <Search className="w-4 h-4" />
-            </HeaderBtn>
-            <HeaderBtn onClick={() => setPanel(panel === "gallery" ? "none" : "gallery")} active={panel === "gallery"} testId="button-gallery">
-              <Images className="w-4 h-4" />
-            </HeaderBtn>
-            {settings.voiceCallsEnabled && (
-              <HeaderBtn onClick={() => startCall("audio")} testId="button-voice-call">
-                <Phone className="w-4 h-4" />
-              </HeaderBtn>
-            )}
-            {settings.videoCallsEnabled && (
-              <HeaderBtn onClick={() => startCall("video")} testId="button-video-call">
-                <Video className="w-4 h-4" />
-              </HeaderBtn>
-            )}
+            <HeaderBtn onClick={() => setPanel(panel === "search" ? "none" : "search")} active={panel === "search"} testId="button-search"><Search className="w-4 h-4" /></HeaderBtn>
+            <HeaderBtn onClick={() => setPanel(panel === "gallery" ? "none" : "gallery")} active={panel === "gallery"} testId="button-gallery"><Images className="w-4 h-4" /></HeaderBtn>
+            {settings.voiceCallsEnabled && <HeaderBtn onClick={() => startCall("audio")} testId="button-voice-call"><Phone className="w-4 h-4" /></HeaderBtn>}
+            {settings.videoCallsEnabled && <HeaderBtn onClick={() => startCall("video")} testId="button-video-call"><Video className="w-4 h-4" /></HeaderBtn>}
           </div>
         </div>
 
@@ -613,11 +612,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 </div>
                 <div className="space-y-0.5">
                   {msgs.map((msg) => (
-                    <div
-                      key={msg.id}
-                      ref={(el) => { if (el) messageRefs.current[msg.id] = el; }}
-                      className="py-0.5"
-                    >
+                    <div key={msg.id} ref={(el) => { if (el) messageRefs.current[msg.id] = el; }} className="py-0.5">
                       <ChatMessage
                         message={msg}
                         isOwn={msg.senderId === userId}
@@ -654,11 +649,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
               <div className="bg-white/7 backdrop-blur-sm border border-white/8 rounded-2xl rounded-bl-sm px-4 py-3">
                 <div className="flex gap-1 items-center h-4">
                   {[0, 1, 2].map((i) => (
-                    <div
-                      key={i}
-                      className="w-1.5 h-1.5 rounded-full bg-white/40 animate-bounce"
-                      style={{ animationDelay: `${i * 150}ms` }}
-                    />
+                    <div key={i} className="w-1.5 h-1.5 rounded-full bg-white/40 animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />
                   ))}
                 </div>
               </div>
@@ -668,12 +659,8 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input area */}
-        <div
-          className="px-3 sm:px-4 flex-shrink-0"
-          style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
-        >
-          {/* Edit mode indicator */}
+        {/* Input */}
+        <div className="px-3 sm:px-4 flex-shrink-0" style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}>
           {editingMsg && (
             <div className="flex items-center gap-3 bg-violet-500/10 border border-violet-500/20 rounded-xl px-4 py-2.5 mb-2">
               <div className="w-0.5 self-stretch bg-violet-400 rounded-full" />
@@ -681,13 +668,10 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 <p className="text-violet-400 text-xs mb-0.5 font-medium">Editing message</p>
                 <p className="text-white/40 text-sm truncate">{editingMsg.text}</p>
               </div>
-              <button onClick={() => { setEditingMsg(null); setEditText(""); }} className="text-white/30 hover:text-white/60 transition p-1">
-                <X className="w-4 h-4" />
-              </button>
+              <button onClick={() => { setEditingMsg(null); setEditText(""); }} className="text-white/30 hover:text-white/60 transition p-1"><X className="w-4 h-4" /></button>
             </div>
           )}
 
-          {/* Reply bar */}
           {replyTo && !editingMsg && settings.repliesEnabled && (
             <div className="flex items-center gap-3 bg-white/5 border border-white/8 rounded-xl px-4 py-2.5 mb-2">
               <div className="w-0.5 self-stretch bg-pink-500 rounded-full" />
@@ -695,13 +679,10 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 <p className="text-pink-400 text-xs mb-0.5">Replying to</p>
                 <p className="text-white/45 text-sm truncate">{replyTo.text ?? "[media]"}</p>
               </div>
-              <button onClick={() => setReplyTo(null)} className="text-white/30 hover:text-white/60 transition p-1">
-                <X className="w-4 h-4" />
-              </button>
+              <button onClick={() => setReplyTo(null)} className="text-white/30 hover:text-white/60 transition p-1"><X className="w-4 h-4" /></button>
             </div>
           )}
 
-          {/* Upload progress */}
           {uploading && (
             <div className="mb-2 bg-white/5 border border-white/8 rounded-xl px-4 py-2.5 flex items-center gap-3">
               <div className="flex-1 h-1.5 bg-white/10 rounded-full overflow-hidden">
@@ -718,10 +699,8 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
           ) : (
             <div className={cn(
               "flex items-end gap-2 border rounded-2xl p-2 relative transition-colors duration-200",
-              editingMsg
-                ? "bg-violet-500/5 border-violet-500/20"
-                : ghostMode
-                ? "bg-violet-900/20 border-violet-500/40 shadow-[0_0_16px_rgba(139,92,246,0.15)]"
+              editingMsg ? "bg-violet-500/5 border-violet-500/20"
+                : ghostMode ? "bg-violet-900/20 border-violet-500/40 shadow-[0_0_16px_rgba(139,92,246,0.15)]"
                 : "bg-white/5 border-white/8"
             )}>
               <input ref={fileInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={(e) => handleFileSelect(e)} />
@@ -731,45 +710,29 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 <div className="relative flex-shrink-0">
                   <button
                     onClick={() => setShowAttachMenu((p) => !p)}
-                    className={cn(
-                      "p-2 rounded-xl transition text-white/40 hover:text-white",
-                      showAttachMenu ? "bg-pink-500/20 text-pink-400" : "hover:bg-white/10"
-                    )}
+                    className={cn("p-2 rounded-xl transition text-white/40 hover:text-white", showAttachMenu ? "bg-pink-500/20 text-pink-400" : "hover:bg-white/10")}
                     data-testid="button-attach-media"
                   >
                     <Plus className="w-5 h-5" />
                   </button>
-
                   {showAttachMenu && (
                     <div className="absolute bottom-11 left-0 bg-[#1a1a2e] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-20 w-44">
                       {settings.imageUploadEnabled && (
-                        <button
-                          onClick={() => { fileInputRef.current?.click(); setShowAttachMenu(false); }}
-                          className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm"
-                        >
+                        <button onClick={() => { fileInputRef.current?.click(); setShowAttachMenu(false); }} className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm">
                           <ImageIcon className="w-4 h-4 text-pink-400" /> Photo / Video
                         </button>
                       )}
                       {settings.videoUploadEnabled && settings.viewOnceEnabled && (
-                        <button
-                          onClick={() => { setViewOnceNext(true); fileInputRef.current?.click(); setShowAttachMenu(false); }}
-                          className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm"
-                        >
+                        <button onClick={() => { setViewOnceNext(true); fileInputRef.current?.click(); setShowAttachMenu(false); }} className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm">
                           <ImageIcon className="w-4 h-4 text-violet-400" /> View Once
                         </button>
                       )}
                       {settings.videoNotesEnabled && (
-                        <button
-                          onClick={() => { setInputMode("videonote"); setShowAttachMenu(false); }}
-                          className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm"
-                        >
+                        <button onClick={() => { setInputMode("videonote"); setShowAttachMenu(false); }} className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm">
                           <VideoIcon className="w-4 h-4 text-blue-400" /> Video Note
                         </button>
                       )}
-                      <button
-                        onClick={() => { audioFileRef.current?.click(); setShowAttachMenu(false); }}
-                        className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm"
-                      >
+                      <button onClick={() => { audioFileRef.current?.click(); setShowAttachMenu(false); }} className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm">
                         <Paperclip className="w-4 h-4 text-emerald-400" /> Audio file
                       </button>
                     </div>
@@ -783,12 +746,9 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                   ghostMode ? "text-violet-200 placeholder-violet-300/30" : "text-white"
                 )}
                 placeholder={
-                  editingMsg
-                    ? "Edit your message…"
-                    : ghostMode
-                    ? "👻 Ghost mode — only you can see this…"
-                    : settings.messagingEnabled
-                    ? "Write something beautiful…"
+                  editingMsg ? "Edit your message…"
+                    : ghostMode ? "👻 Ghost mode — only you can see this…"
+                    : settings.messagingEnabled ? "Write something beautiful…"
                     : "Messaging is disabled"
                 }
                 rows={1}
@@ -802,19 +762,12 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
 
               <div className="flex items-center gap-1 flex-shrink-0">
                 {settings.voiceMessagesEnabled && !text.trim() && !editingMsg && (
-                  <button
-                    onClick={() => setInputMode("voice")}
-                    className="p-2 rounded-xl hover:bg-white/10 text-white/40 hover:text-white transition"
-                    data-testid="button-voice-message"
-                  >
+                  <button onClick={() => setInputMode("voice")} className="p-2 rounded-xl hover:bg-white/10 text-white/40 hover:text-white transition" data-testid="button-voice-message">
                     <Mic className="w-5 h-5" />
                   </button>
                 )}
                 {editingMsg ? (
-                  <button
-                    onClick={handleEditSubmit}
-                    className="p-2.5 rounded-xl bg-gradient-to-r from-violet-500 to-violet-600 text-white hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-violet-500/20"
-                  >
+                  <button onClick={handleEditSubmit} className="p-2.5 rounded-xl bg-gradient-to-r from-violet-500 to-violet-600 text-white hover:opacity-90 active:scale-95 transition-all shadow-lg shadow-violet-500/20">
                     <Check className="w-4 h-4" />
                   </button>
                 ) : text.trim() && settings.messagingEnabled ? (
@@ -822,9 +775,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                     onClick={handleSendText}
                     className={cn(
                       "p-2.5 rounded-xl text-white hover:opacity-90 active:scale-95 transition-all shadow-lg",
-                      ghostMode
-                        ? "bg-gradient-to-r from-violet-600 to-violet-800 shadow-violet-500/20"
-                        : "bg-gradient-to-r from-pink-500 to-violet-600 shadow-pink-500/20"
+                      ghostMode ? "bg-gradient-to-r from-violet-600 to-violet-800 shadow-violet-500/20" : "bg-gradient-to-r from-pink-500 to-violet-600 shadow-pink-500/20"
                     )}
                     data-testid="button-send"
                   >
@@ -852,7 +803,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
       <CallOverlay
         callStatus={callStatus} callType={callType} isMuted={isMuted} isCameraOff={isCameraOff}
         callDuration={callDuration} isMinimized={isMinimized} setIsMinimized={setIsMinimized}
-        localVideoRef={localVideoRef} remoteVideoRef={remoteVideoRef}
+        localVideoRef={localVideoRef} remoteVideoRef={remoteVideoRef} remoteAudioRef={remoteAudioRef}
         onEnd={endCall} onToggleMute={toggleMute} onToggleCamera={toggleCamera} onSwitchCamera={switchCamera}
         onAnswer={() => incomingCallId && answerCall(incomingCallId)}
         onReject={() => incomingCallId && rejectCall(incomingCallId)}
@@ -869,23 +820,9 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
   );
 }
 
-function HeaderBtn({
-  children, onClick, active, testId,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  active?: boolean;
-  testId?: string;
-}) {
+function HeaderBtn({ children, onClick, active, testId }: { children: React.ReactNode; onClick: () => void; active?: boolean; testId?: string }) {
   return (
-    <button
-      onClick={onClick}
-      data-testid={testId}
-      className={cn(
-        "p-2 rounded-xl transition-all",
-        active ? "bg-pink-500/20 text-pink-400" : "hover:bg-white/5 text-white/40 hover:text-white"
-      )}
-    >
+    <button onClick={onClick} data-testid={testId} className={cn("p-2 rounded-xl transition-all", active ? "bg-pink-500/20 text-pink-400" : "hover:bg-white/5 text-white/40 hover:text-white")}>
       {children}
     </button>
   );

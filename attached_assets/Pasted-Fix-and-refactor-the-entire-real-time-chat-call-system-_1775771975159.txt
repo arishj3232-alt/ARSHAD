@@ -1,0 +1,241 @@
+Fix and refactor the entire real-time chat + call system to production-level stability.
+
+---
+
+## CORE GOAL
+
+Make the app fully functional with:
+
+* Real-time messaging sync
+* Working WebRTC voice/video calls
+* Accurate presence system (online, typing, last seen)
+* Correct feature logic (ghost, reveal, read receipts)
+* Proper media lifecycle (view-once, deleted media)
+* Clean UI identity (name, profile picture)
+
+---
+
+1. REAL-TIME PRESENCE SYSTEM
+
+---
+
+Implement a centralized user store on the server:
+
+* Store: { socketId, name, room, status, lastSeen, dp }
+* On join:
+
+  * Add user with status "online"
+  * Emit "presence-update" to room
+* On disconnect:
+
+  * Set status "offline"
+  * Set lastSeen = Date.now()
+  * DO NOT immediately delete user
+* Sync all users via "presence-update"
+
+Frontend:
+
+* Listen for presence-update
+* Show:
+
+  * 🟢 Online
+  * 🔴 Last seen time
+  * 🟡 Viewing media
+  * 🔵 Recording
+  * ⚪ Browsing
+* Replace "Them" with actual username
+* Show DP on left, fallback to first letter
+
+---
+
+2. TYPING + STATUS STATES
+
+---
+
+* Emit "typing" when user types
+* Show "Typing..." for 2 seconds
+* Add custom states:
+
+  * viewing
+  * recording
+  * browsing
+* Sync via socket in real-time
+
+---
+
+3. WEBRTC (VOICE + VIDEO FIX)
+
+---
+
+Fix full peer connection flow:
+
+* Use getUserMedia({ audio: true, video })
+* Add tracks using addTrack()
+* Handle peerConnection.ontrack
+* Bind remote stream to video/audio elements
+* Ensure:
+
+  * autoplay = true
+  * muted = false (for audio element)
+
+Fix signaling:
+
+* Proper offer/answer exchange
+* ICE candidate exchange
+
+Fix issues:
+
+* Voice not transferring → ensure audio tracks added
+* Video black screen → ensure ontrack assigns stream
+* Flip camera:
+
+  * Use replaceTrack() with new facingMode
+
+---
+
+4. ONE-TIME MEDIA FIX
+
+---
+
+* When media is opened:
+
+  * Emit "view-once-opened"
+  * Mark message as viewed
+  * Remove media URL (or invalidate)
+
+* Prevent reload access:
+
+  * If viewed → show "Expired"
+
+---
+
+5. REVEAL MODE (GLOBAL FIX)
+
+---
+
+* Show ALL deleted messages (not just own)
+* Remove 8-second timeout (make persistent toggle)
+* Do NOT delete media from storage
+  Instead:
+  { deleted: true, hidden: true }
+
+Frontend:
+
+* If revealMode ON → show deleted messages + media
+
+---
+
+6. GHOST MODE / FEATURE FLAGS FIX
+
+---
+
+Fix dynamic keyword parsing:
+
+Format:
+off + first 2 letters of keyword
+
+Examples:
+offbh → ghost off
+offbe → reveal off
+offon → read receipts off
+
+Special case:
+If admin keyword = "nun"
+→ offnu disables feature
+
+Ensure all features:
+
+* ghostMode
+* revealMode
+* readReceipt
+  are controlled centrally and synced via socket
+
+---
+
+7. SWIPE REPLY (ANDROID UX)
+
+---
+
+* Implement touch gesture detection
+* Trigger reply if swipe > 60px
+* Add smooth translate animation
+* Mimic WhatsApp reply interaction
+
+---
+
+8. ADMIN DEVICE CONTROL
+
+---
+
+* Allow admin to remove users
+* Emit "force-logout"
+* Client should reload or redirect to join screen
+
+---
+
+9. PROFILE SYSTEM FIX
+
+---
+
+* Store username during join
+* Display username in header (not "Them")
+* Show profile photo on left
+
+Prevent duplicate DP:
+
+* Hash uploaded image (md5 or similar)
+* If same as previous → reject upload
+
+---
+
+10. MESSAGE STATE STRUCTURE (IMPORTANT)
+
+---
+
+Refactor messages to:
+
+{
+id,
+text,
+mediaUrl,
+viewed,
+deleted,
+deletedForEveryone,
+hidden,
+senderId,
+timestamp
+}
+
+---
+
+11. ROOT ARCHITECTURE FIX
+
+---
+
+Ensure:
+
+* All state changes go through socket events
+* No local-only UI state for critical features
+* Server is source of truth
+* Proper cleanup of listeners
+* Avoid race conditions in WebRTC
+
+---
+
+## FINAL RESULT EXPECTATION
+
+After fix:
+
+✔ Voice calls work perfectly
+✔ Video calls show both users
+✔ Camera flip works
+✔ One-time media truly disappears
+✔ Reveal mode shows all deleted content
+✔ Ghost mode toggles correctly
+✔ Typing indicator works
+✔ Online / last seen updates live
+✔ Username + DP display correctly
+✔ Swipe reply works like WhatsApp
+✔ Admin can remove devices
+
+Focus on stability, synchronization, and real-time accuracy.
