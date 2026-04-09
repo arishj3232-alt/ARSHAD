@@ -1,0 +1,196 @@
+Build a full-stack, production-level 2-user private communication web application called "OnlyTwo".
+
+This must be a REAL working system (not a demo), including frontend, backend, real-time communication, persistent storage, media handling, and call functionality.
+
+────────────────────────
+🎯 CORE REQUIREMENTS
+────────────────────────
+
+* Only 2 users allowed in the system
+* No signup/login pages
+* Entry via secret room code
+* Block any third user with message:
+  "This space is only for two"
+* Maintain persistent session
+
+────────────────────────
+⚙️ TECH STACK
+────────────────────────
+Frontend:
+
+* React (modern component-based)
+* Tailwind CSS for styling
+
+Backend:
+
+* Node.js + Express
+
+Database:
+
+* Firebase Firestore (for messages)
+
+Storage:
+
+* Firebase Storage (for images, videos, audio)
+
+Realtime:
+
+* Firebase real-time listeners (onSnapshot)
+
+Calls:
+
+* WebRTC (peer-to-peer)
+* Use backend only for signaling
+
+────────────────────────
+💬 CHAT SYSTEM
+────────────────────────
+
+* Real-time messaging (instant updates)
+* Text messages with emoji support
+* Reply to message
+* Seen / delivered status
+* Typing indicator
+* Smooth UI updates
+* Auto-scroll to latest message
+
+────────────────────────
+📜 SMART MESSAGE LOADING
+────────────────────────
+
+* Load only last 20 messages initially
+* Implement pagination (load older messages on scroll)
+* Maintain scroll position while loading
+
+────────────────────────
+🗑️ DELETE FOR EVERYONE
+────────────────────────
+
+* Delete message for both users
+* Do not remove from DB, instead mark as deleted
+* Replace UI with:
+  "This message was deleted"
+
+────────────────────────
+🖼️🎥 MEDIA SHARING
+────────────────────────
+
+* Upload and send images
+* Upload and send videos
+* Preview images in chat
+* Inline video player
+* Fullscreen viewer
+* Store files in Firebase Storage
+
+────────────────────────
+🎤 VOICE MESSAGE SYSTEM
+────────────────────────
+
+* Record audio using MediaRecorder API
+* Send audio messages
+* Playback inside chat with controls
+* Show recording UI feedback
+
+────────────────────────
+🔍 SEARCH SYSTEM
+────────────────────────
+
+* Search messages by text
+* Query Firestore efficiently (do not load all messages)
+* Highlight matching text
+* Display results with timestamp
+* Clicking result scrolls to that message
+
+────────────────────────
+🔄 REAL-TIME FEATURES
+────────────────────────
+
+* Messages update instantly
+* Typing indicator (live)
+* Presence system:
+
+  * Online/offline
+  * "Last seen"
+  * "User joined/left"
+
+────────────────────────
+🔔 NOTIFICATIONS
+────────────────────────
+
+* New message alerts
+* Typing indicator UI
+* Call incoming notification UI
+
+────────────────────────
+📞 VOICE CALL (WebRTC)
+────────────────────────
+
+* Start call / receive call
+* Accept / reject
+* End call
+* Mute/unmute microphone
+* Speaker toggle
+* Phone/earpiece mode indicator
+* Call timer
+
+────────────────────────
+🎥 VIDEO CALL (WebRTC)
+────────────────────────
+
+* Start video call / receive
+* Camera ON/OFF
+* Microphone ON/OFF
+* Camera swap (front/back)
+* Fullscreen mode
+* Minimize to floating draggable window
+* Show remote video + self view overlay
+
+────────────────────────
+🖱️ CURSOR PRESENCE (ADVANCED)
+────────────────────────
+
+* Show both users' cursors in real-time
+* Unique cursor styles
+* Smooth movement animation
+
+────────────────────────
+📸 MEMORY / MEDIA GALLERY
+────────────────────────
+
+* Display shared images/videos in gallery
+* Timeline view
+* Fullscreen viewer
+
+────────────────────────
+🎨 UI / UX REQUIREMENTS
+────────────────────────
+
+* Dark theme with modern design
+* Glassmorphism effects
+* Smooth animations (fade, scale, transitions)
+* Responsive design (mobile + desktop)
+* Clean, modular components
+
+────────────────────────
+📦 BACKEND RESPONSIBILITIES
+────────────────────────
+
+* Manage room (limit to 2 users)
+* Handle WebRTC signaling
+* Secure message flow
+* Integrate Firebase services
+* Handle API endpoints if needed
+
+────────────────────────
+🧠 PERFORMANCE
+────────────────────────
+
+* Optimize reads/writes
+* Use pagination
+* Avoid loading full dataset
+* Efficient re-renders
+
+────────────────────────
+💎 FINAL GOAL
+────────────────────────
+The application must be fully functional, smooth, and production-ready — not a prototype. It should support real-time chat, media, voice, video calls, and persistent storage with a premium user experience.
