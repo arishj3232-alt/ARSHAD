@@ -16,7 +16,6 @@ import {
   X,
   Images,
   Video as VideoIcon,
-  Shield,
   Plus,
   Paperclip,
 } from "lucide-react";
@@ -26,7 +25,6 @@ import { useWebRTC } from "@/hooks/useWebRTC";
 import { useMediaUpload } from "@/hooks/useMediaUpload";
 import { useTypingIndicator, usePresence } from "@/hooks/useSession";
 import { useCursorPresence } from "@/hooks/useCursorPresence";
-import { useGallery } from "@/hooks/useGallery";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useNotifications } from "@/hooks/useNotifications";
 import ChatMessage from "@/components/ChatMessage";
@@ -88,13 +86,15 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
     addReaction,
     removeReaction,
     markViewOnceViewed,
-    searchMessages,
   } = useMessages(ROOM_ID, userId);
 
   const { isOtherTyping, setTyping } = useTypingIndicator(ROOM_ID, userId);
   const { uploading, progress, uploadMedia } = useMediaUpload();
   const { otherCursors } = useCursorPresence(userId, userName);
-  const { mediaMessages, loading: galleryLoading } = useGallery(ROOM_ID);
+  const mediaMessages = useMemo(
+    () => messages.filter((m) => !m.deleted && (m.type === "image" || m.type === "video")),
+    [messages]
+  );
 
   const {
     callStatus,
@@ -363,9 +363,6 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
                 <Video className="w-4 h-4" />
               </HeaderBtn>
             )}
-            <HeaderBtn onClick={() => setShowAdmin((p) => !p)}>
-              <Shield className="w-4 h-4" />
-            </HeaderBtn>
           </div>
         </div>
 
@@ -614,7 +611,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
           )}
         >
           <SearchPanel
-            onSearch={searchMessages}
+            messages={messages}
             onScrollTo={(id) => { scrollToMessage(id); setPanel("none"); }}
             onClose={() => setPanel("none")}
             currentUserId={userId}
@@ -633,7 +630,7 @@ export default function ChatPage({ userId, userName, otherId }: Props) {
         >
           <GalleryPanel
             mediaMessages={mediaMessages}
-            loading={galleryLoading}
+            loading={loading}
             onClose={() => setPanel("none")}
           />
         </div>

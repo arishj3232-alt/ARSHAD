@@ -1,20 +1,20 @@
-import { useState, useCallback } from "react";
+import { useState, useMemo } from "react";
 import { Search, X } from "lucide-react";
 import { formatTime, formatDate } from "@/lib/utils";
 import type { Message } from "@/hooks/useMessages";
 
 type Props = {
-  onSearch: (q: string) => Promise<Message[]>;
+  messages: Message[];
   onScrollTo: (id: string) => void;
   onClose: () => void;
   currentUserId: string;
   otherName: string;
 };
 
-function highlight(text: string, query: string) {
-  if (!query) return text;
+function Highlighted({ text, query }: { text: string; query: string }) {
+  if (!query) return <>{text}</>;
   const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return text;
+  if (idx === -1) return <>{text}</>;
   return (
     <>
       {text.slice(0, idx)}
@@ -27,27 +27,21 @@ function highlight(text: string, query: string) {
 }
 
 export default function SearchPanel({
-  onSearch,
+  messages,
   onScrollTo,
   onClose,
   currentUserId,
   otherName,
 }: Props) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Message[]>([]);
-  const [searching, setSearching] = useState(false);
 
-  const doSearch = useCallback(
-    async (q: string) => {
-      setQuery(q);
-      if (!q.trim()) { setResults([]); return; }
-      setSearching(true);
-      const r = await onSearch(q);
-      setResults(r);
-      setSearching(false);
-    },
-    [onSearch]
-  );
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    return messages.filter(
+      (m) => !m.deleted && m.type === "text" && m.text?.toLowerCase().includes(q)
+    );
+  }, [query, messages]);
 
   return (
     <div className="flex flex-col h-full bg-[#0d0d14] border-l border-white/5">
@@ -66,32 +60,22 @@ export default function SearchPanel({
           <input
             autoFocus
             className="w-full bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-white placeholder-white/20 focus:outline-none focus:border-pink-500/50 text-sm transition"
-            placeholder="Search messages..."
+            placeholder="Search messages…"
             value={query}
-            onChange={(e) => doSearch(e.target.value)}
+            onChange={(e) => setQuery(e.target.value)}
             data-testid="input-search"
           />
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {searching && (
-          <div className="flex items-center justify-center py-8">
-            <div className="w-5 h-5 border-2 border-pink-500/30 border-t-pink-500 rounded-full animate-spin" />
-          </div>
-        )}
-        {!searching && query && results.length === 0 && (
-          <div className="text-center text-white/30 py-8 text-sm">
-            No messages found
-          </div>
+        {query.trim() && results.length === 0 && (
+          <div className="text-center text-white/30 py-8 text-sm">No messages found</div>
         )}
         {results.map((msg) => (
           <button
             key={msg.id}
-            onClick={() => {
-              onScrollTo(msg.id);
-              onClose();
-            }}
+            onClick={() => { onScrollTo(msg.id); onClose(); }}
             className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors border-b border-white/5"
           >
             <div className="flex items-center justify-between mb-1">
@@ -103,7 +87,7 @@ export default function SearchPanel({
               </span>
             </div>
             <p className="text-sm text-white/70 line-clamp-2 leading-snug">
-              {highlight(msg.text ?? "[media]", query)}
+              <Highlighted text={msg.text ?? "[media]"} query={query.trim()} />
             </p>
           </button>
         ))}

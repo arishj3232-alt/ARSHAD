@@ -11,7 +11,6 @@ import {
   serverTimestamp,
   startAfter,
   getDocs,
-  where,
   DocumentSnapshot,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -173,22 +172,14 @@ export function useMessages(roomId: string, currentUserId: string | null) {
   );
 
   const searchMessages = useCallback(
-    async (searchText: string): Promise<Message[]> => {
+    (searchText: string): Message[] => {
       if (!searchText.trim()) return [];
-      const q = query(
-        collection(db, "rooms", roomId, "messages"),
-        where("deleted", "==", false),
-        orderBy("createdAt", "desc"),
-        limit(50)
-      );
-      const snap = await getDocs(q);
       const lower = searchText.toLowerCase();
-      return snap.docs
-        .map(mapDoc)
-        .filter((m) => m.text?.toLowerCase().includes(lower))
-        .reverse();
+      return messages.filter(
+        (m) => !m.deleted && m.type === "text" && m.text?.toLowerCase().includes(lower)
+      );
     },
-    [roomId]
+    [messages]
   );
 
   return {

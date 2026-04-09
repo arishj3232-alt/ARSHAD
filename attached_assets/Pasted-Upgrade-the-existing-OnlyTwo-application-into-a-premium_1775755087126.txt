@@ -1,0 +1,201 @@
+Upgrade the existing OnlyTwo application into a premium SaaS-grade messaging platform with advanced UX, message controls, cross-browser notifications, and enhanced presence system.
+
+IMPORTANT:
+
+* Keep existing architecture (React + Firestore + RTDB + Cloudinary + WebRTC)
+* Do NOT break current logic or hooks
+* Enhance features, UI, and behavior
+* Maintain performance and mobile responsiveness
+
+==================================================
+🎨 1. SaaS-LEVEL UI UPGRADE
+===========================
+
+* Clean SaaS layout (like Slack/Discord/iMessage hybrid)
+* Improve spacing, typography, and hierarchy
+* Add:
+
+  * subtle gradients
+  * glass panels
+  * soft shadows
+* Improve message bubble design (more refined)
+* Add hover states (desktop) + touch feedback (mobile)
+* Add smooth transitions everywhere
+
+📱 MOBILE FIRST:
+
+* Perfect responsive layout
+* Sticky input bar
+* Safe area support (notch devices)
+* No overflow / layout break
+
+==================================================
+✏️ 2. MESSAGE EDITING SYSTEM
+============================
+
+* Allow users to edit their own messages
+* Show "edited" label after update
+* Keep original timestamp
+* Update message in Firestore
+
+UI:
+
+* Long press (mobile) or hover menu (desktop)
+* "Edit message" option
+* Inline edit input
+
+==================================================
+🗑️ 3. DELETE SYSTEM (WHATSAPP STYLE)
+=====================================
+
+Add TWO options:
+
+1. Delete for me
+
+* Removes message only for current user
+* Other user still sees it
+
+2. Delete for everyone
+
+* Replace message with:
+  "This message was deleted"
+* Applies to BOTH users
+
+Implementation:
+
+* Store delete flags:
+
+  * deletedFor: [userId]
+  * deletedForEveryone: true
+
+UI:
+
+* Show options in context menu
+* Clean confirmation modal
+
+==================================================
+🧠 4. ADVANCED PRESENCE SYSTEM
+==============================
+
+Add real-time activity states:
+
+* "Partner is typing..."
+* "Partner is online"
+* "Partner is offline"
+* "Partner is viewing an image"
+* "Partner is watching a video"
+
+Implementation:
+
+* Use RTDB presence tracking
+* Add activity state field:
+  typing / idle / viewing_image / watching_video
+
+UI:
+
+* Show status below header
+* Smooth animated transitions
+
+==================================================
+🔔 5. CROSS-BROWSER NOTIFICATIONS
+=================================
+
+Upgrade notification system:
+
+* Support ALL browsers (not just Chrome):
+
+  * Chrome
+  * Edge
+  * Firefox
+  * Safari (fallback behavior)
+
+Features:
+
+* Request permission properly
+
+* Show notifications ONLY when tab is hidden
+
+* Clean format:
+
+  * Sender name
+  * Message preview
+  * Icon/avatar
+
+* For calls:
+
+  * "Incoming call from [name]"
+
+Implementation:
+
+* Use Notification API
+* Add fallback for unsupported browsers
+
+==================================================
+📱 6. MOBILE UX IMPROVEMENTS
+============================
+
+* Long press menu (edit/delete/react)
+* Swipe to reply
+* Tap to react
+* Smooth scroll behavior
+* Keyboard-safe layout
+
+==================================================
+🎬 7. MEDIA ACTIVITY TRACKING
+=============================
+
+When user opens media:
+
+* Trigger presence state:
+
+  * viewing_image
+  * watching_video
+
+* Reset when closed
+
+==================================================
+⚙️ 8. ADMIN PANEL UPGRADE
+=========================
+
+Add NEW toggles:
+
+Message Control:
+
+* Enable/disable editing
+* Enable/disable delete for me
+* Enable/disable delete for everyone
+
+Presence:
+
+* Enable/disable typing status
+* Enable/disable activity tracking (viewing/watching)
+
+Notifications:
+
+* Enable/disable notifications globally
+
+UI:
+
+* Group toggles cleanly
+* Instant apply via RTDB
+* Hide UI elements when disabled
+
+==================================================
+💎 FINAL GOAL
+=============
+
+Make OnlyTwo feel like a professional SaaS messaging product similar to:
+
+* Slack
+* Discord
+* WhatsApp
+
+Focus on:
+
+* clarity
+* control
+* smooth UX
+* mobile perfection
+
+Do NOT ask for confirmation.
+Implement cleanly and integrate with existing system.

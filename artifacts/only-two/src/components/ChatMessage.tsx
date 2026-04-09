@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { Trash2, Reply, CheckCheck, Check, Play, Pause, Eye, EyeOff } from "lucide-react";
 import { cn, formatTime } from "@/lib/utils";
 import type { Message } from "@/hooks/useMessages";
+import TextWithLinks from "@/components/LinkPreview";
 
 const REACTION_EMOJIS = ["❤️", "😂", "👍", "😮"];
 
@@ -321,10 +322,8 @@ export default function ChatMessage({
             )}
 
             <div className="px-4 py-2.5">
-              {message.type === "text" && (
-                <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
-                  {message.text}
-                </p>
+              {message.type === "text" && message.text && (
+                <TextWithLinks text={message.text} isOwn={isOwn} />
               )}
               {(message.type === "image" || message.type === "video") &&
                 message.viewOnce ? (
