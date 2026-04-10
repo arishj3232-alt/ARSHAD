@@ -86,6 +86,7 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showDpMenu, setShowDpMenu] = useState(false);
   const [viewOnceNext, setViewOnceNext] = useState(false);
 
   // --- Command-driven states ---
@@ -305,7 +306,7 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key === "S") { e.preventDefault(); setShowAdmin((p) => !p); }
-      if (e.key === "Escape") { setShowAttachMenu(false); setShowAdmin(false); setEditingMsg(null); }
+      if (e.key === "Escape") { setShowAttachMenu(false); setShowDpMenu(false); setShowAdmin(false); setEditingMsg(null); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -548,48 +549,16 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
       <div className="flex flex-col flex-1 min-w-0 h-full">
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 bg-[#0c0c16]/80 backdrop-blur-xl flex-shrink-0">
-          {/* YOUR profile picture — single avatar in header, clickable to upload */}
+          {/* Other user's avatar + presence dot */}
           <div className="relative flex-shrink-0">
-            <input
-              ref={dpInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }}
-            />
-            <button
-              onClick={() => dpInputRef.current?.click()}
-              title={profile.dpUrl ? "Tap to change your profile picture" : "Tap to set your profile picture"}
-              className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20 relative"
-            >
-              {profile.dpUrl ? (
-                <img src={profile.dpUrl} alt={userName} className="w-full h-full object-cover" />
+            <div className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20">
+              {otherDpUrl ? (
+                <img src={otherDpUrl} alt={otherName} className="w-full h-full object-cover" />
               ) : (
-                <span className="text-white font-bold text-sm select-none">{userName[0]?.toUpperCase() ?? "?"}</span>
+                <span className="text-white font-bold text-sm select-none">{otherName[0]?.toUpperCase() ?? "?"}</span>
               )}
-            </button>
-
-            {/* Upload progress ring */}
-            {dpUploading && (
-              <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin pointer-events-none" />
-            )}
-
-            {/* Delete DP button — only when a picture is set */}
-            {profile.dpUrl && !dpUploading && (
-              <button
-                onClick={(e) => { e.stopPropagation(); deleteDp(); }}
-                title="Remove profile picture"
-                className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center shadow transition z-10"
-              >
-                <X className="w-2.5 h-2.5" />
-              </button>
-            )}
-
-            {/* Other user's online status dot */}
-            <div
-              className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)}
-              title={statusDot.label}
-            />
+            </div>
+            <div className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)} title={statusDot.label} />
           </div>
 
           <div className="flex-1 min-w-0">
@@ -743,8 +712,70 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
           ) : inputMode === "videonote" ? (
             <VideoNoteRecorder onSend={handleVideoNoteSend} onCancel={() => setInputMode("text")} />
           ) : (
+            <div className="flex items-end gap-2">
+              {/* YOUR profile picture — left of input, tap for context menu */}
+              <div className="relative flex-shrink-0 self-end pb-1">
+                {/* Hidden DP file input */}
+                <input
+                  ref={dpInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }}
+                />
+
+                {/* Context menu backdrop */}
+                {showDpMenu && (
+                  <div className="fixed inset-0 z-30" onClick={() => setShowDpMenu(false)} />
+                )}
+
+                {/* Context menu popup */}
+                {showDpMenu && (
+                  <div className="absolute bottom-full mb-2 left-0 bg-[#1a1a2e] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-40 w-52">
+                    <button
+                      onClick={() => { dpInputRef.current?.click(); setShowDpMenu(false); }}
+                      className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm text-left"
+                    >
+                      Change profile picture
+                    </button>
+                    {profile.dpUrl && (
+                      <button
+                        onClick={() => { deleteDp(); setShowDpMenu(false); }}
+                        className="flex items-center gap-3 w-full px-4 py-3 hover:bg-rose-500/10 text-rose-400/70 hover:text-rose-400 transition text-sm text-left"
+                      >
+                        Remove profile picture
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowDpMenu(false)}
+                      className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/30 hover:text-white/60 transition text-sm text-left border-t border-white/5"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+
+                {/* Avatar button */}
+                <button
+                  onClick={() => setShowDpMenu((p) => !p)}
+                  title="Your profile picture"
+                  className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-md relative"
+                >
+                  {profile.dpUrl ? (
+                    <img src={profile.dpUrl} alt={userName} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-white font-bold text-xs select-none">{userName[0]?.toUpperCase() ?? "?"}</span>
+                  )}
+                </button>
+
+                {/* Upload progress ring */}
+                {dpUploading && (
+                  <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin pointer-events-none" />
+                )}
+              </div>
+
             <div className={cn(
-              "flex items-end gap-2 border rounded-2xl p-2 relative transition-colors duration-200",
+              "flex-1 flex items-end gap-2 border rounded-2xl p-2 relative transition-colors duration-200",
               editingMsg ? "bg-violet-500/5 border-violet-500/20"
                 : ghostMode ? "bg-violet-900/20 border-violet-500/40 shadow-[0_0_16px_rgba(139,92,246,0.15)]"
                 : "bg-white/5 border-white/8"
@@ -829,6 +860,7 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
                   </button>
                 ) : null}
               </div>
+            </div>
             </div>
           )}
         </div>
