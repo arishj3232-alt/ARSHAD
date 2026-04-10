@@ -11,10 +11,12 @@ import { ref, set, onDisconnect, onValue, get } from "firebase/database";
 import { db, rtdb } from "@/lib/firebase";
 
 const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
-const MAX_OTHER_USERS = 1;         // block a 3rd user (room is for 2)
-const STALE_MS = 5 * 60 * 1000;   // 5 min heartbeat stale threshold
-const HEARTBEAT_MS = 25 * 1000;   // refresh presence every 25 s
-const PRESENCE_DEBOUNCE_MS = 150; // batch rapid Firestore updates
+const MAX_OTHER_USERS = 1;          // block a 3rd user (room is for 2)
+const STALE_MS = 5 * 60 * 1000;    // 5 min — used for "last seen" display only
+const ACTIVE_MS = 45 * 1000;        // 45 s — used for capacity block (2 heartbeat cycles + buffer)
+const HEARTBEAT_MS = 25 * 1000;    // refresh presence every 25 s
+const PRESENCE_DEBOUNCE_MS = 150;  // batch rapid Firestore updates
+const JOIN_DELAY_MS = 400;          // settle delay before capacity check to prevent race conditions on reconnect
 
 export type SessionUser = {
   id: string;
@@ -96,16 +98,28 @@ export function useSession() {
     localStorage.setItem("onlytwo-user-name", name.trim());
 
     try {
-      // Block check — only count genuinely online others
+      // Small settle delay: let any in-progress reconnect / onDisconnect handlers
+      // finish writing their presence docs before we snapshot the room.
+      await new Promise<void>((resolve) => setTimeout(resolve, JOIN_DELAY_MS));
+
+      // Block check — count only truly active other users.
+      //
+      // Rules:
+      //   • d.id === userId  → always skip (same user rejoining)
+      //   • online !== true  → skip (already marked offline)
+      //   • lastSeenTs age > ACTIVE_MS (45 s) → skip (stale / abandoned session)
+      //
+      // ACTIVE_MS = 45 s covers 1 missed heartbeat (25 s) plus generous network
+      // latency, so a briefly-reconnecting user is never counted twice.
       const presenceCol = collection(db, "rooms", "main", "presence");
       const presenceSnap = await getDocs(presenceCol);
       const now = Date.now();
 
       const activeOtherCount = presenceSnap.docs.filter((d) => {
-        if (d.id === userId) return false;
+        if (d.id === userId) return false;          // own doc — always allow rejoin
         const data = d.data();
         const ts: number = data.lastSeenTs ?? 0;
-        return (data.online === true) && (now - ts < STALE_MS);
+        return (data.online === true) && (now - ts < ACTIVE_MS);
       }).length;
 
       if (activeOtherCount > MAX_OTHER_USERS) {
