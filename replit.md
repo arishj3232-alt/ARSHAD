@@ -41,11 +41,21 @@ A private 2-user real-time communication web app.
 - Mobile viewport: `100dvh` + `env(safe-area-inset-bottom)` padding
 - Typing debounce: 1.5s before clearing typing indicator
 
+**Production-grade features:**
+- **Error boundary** — wraps the entire app; friendly error screen + reload on unhandled crashes
+- **TURN server support** — ICE config includes open-relay TURN (Metered free tier) for calls across symmetric NAT. Override via `VITE_TURN_URL` / `VITE_TURN_USERNAME` / `VITE_TURN_CREDENTIAL` env vars
+- **Network detection** — `useNetworkStatus` monitors RTDB `.info/connected`; shows yellow banner if connection drops
+- **WebRTC listener cleanup** — all per-call `onSnapshot` unsub functions collected in `snapshotUnsubsRef`, flushed in `cleanup()`; zero listener leaks
+- **Media permission errors** — classified (permission denied / no device / overconstrained) with dismissible UI
+- **Rate limiting** — `useRateLimit(5, 10_000)` sliding-window limiter on message send; shows toast if exceeded
+- **Soft disconnect** — on `leaveRoom()` or tab close, updates presence to `online: false + lastSeenTs` instead of deleting
+- **Presence debounce** — 150ms batch on Firestore snapshots to prevent flicker
+
 **Tech Stack:**
 - React + Vite + TypeScript
 - TailwindCSS v4
 - Firebase (Firestore, Realtime Database — NO Storage, uses Cloudinary instead)
-- WebRTC (simple-peer)
+- WebRTC (browser native RTCPeerConnection)
 - Framer Motion
 - Wouter (routing)
 - Cloudinary (cloud: `dwqgqkcac`, preset: `onlytwo_upload`)

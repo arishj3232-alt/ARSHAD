@@ -12,14 +12,60 @@ import { db } from "@/lib/firebase";
 
 export type CallType = "audio" | "video";
 export type CallStatus = "idle" | "calling" | "incoming" | "connected" | "ended";
+export type MediaErrorType = "permission-denied" | "no-device" | "overconstrained" | "unknown";
 
-const ICE_SERVERS = {
-  iceServers: [
+// ─── ICE Server Configuration ────────────────────────────────────────────────
+//
+// STUN-only will work for ~80% of users (normal home/office NAT).
+// The remaining ~20% — mobile carriers, symmetric NAT, strict enterprise
+// firewalls — REQUIRE a TURN relay. Set these env vars for production:
+//
+//   VITE_TURN_URL       e.g. "turn:your.turn.server:3478"
+//   VITE_TURN_USERNAME  TURN username
+//   VITE_TURN_CREDENTIAL TURN credential
+//
+// Free TURN via Metered (openrelay) is included as a fallback so that calls
+// work out of the box without additional config.
+function buildIceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-  ],
+    { urls: "stun:stun.cloudflare.com:3478" },
+    // Public open-relay TURN (Metered free tier — suitable for low-traffic dev/prod)
+    {
+      urls: [
+        "turn:openrelay.metered.ca:80",
+        "turn:openrelay.metered.ca:443",
+        "turns:openrelay.metered.ca:443",
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ];
+
+  // Override with custom TURN if env vars are set
+  const turnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
+  const turnUser = import.meta.env.VITE_TURN_USERNAME as string | undefined;
+  const turnCred = import.meta.env.VITE_TURN_CREDENTIAL as string | undefined;
+  if (turnUrl && turnUser && turnCred) {
+    servers.push({
+      urls: [turnUrl, turnUrl.replace(/^turn:/, "turns:")],
+      username: turnUser,
+      credential: turnCred,
+    });
+  }
+
+  return servers;
+}
+
+const ICE_CONFIG: RTCConfiguration = {
+  iceServers: buildIceServers(),
+  iceTransportPolicy: "all", // Use TURN relay only when STUN fails
+  bundlePolicy: "max-bundle",
+  rtcpMuxPolicy: "require",
 };
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useWebRTC(roomId: string, userId: string | null) {
   const [callStatus, setCallStatus] = useState<CallStatus>("idle");
@@ -28,7 +74,9 @@ export function useWebRTC(roomId: string, userId: string | null) {
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [isMinimized, setIsMinimized] = useState(false);
-  // Remote stream in state so effects can reactively bind it to DOM elements
+  const [mediaError, setMediaError] = useState<{ type: MediaErrorType; message: string } | null>(null);
+
+  // Remote stream stored in state so effects can reactively bind it to DOM
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -40,7 +88,10 @@ export function useWebRTC(roomId: string, userId: string | null) {
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Reactively assign remote stream to DOM elements whenever either changes
+  // All per-call Firestore snapshot unsubs — flushed on cleanup()
+  const snapshotUnsubsRef = useRef<Array<() => void>>([]);
+
+  // ─── Reactive DOM binding ─────────────────────────────────────────────────
   useEffect(() => {
     if (!remoteStream) return;
     if (remoteVideoRef.current) {
@@ -53,16 +104,19 @@ export function useWebRTC(roomId: string, userId: string | null) {
     }
   }, [remoteStream]);
 
+  // ─── Cleanup ──────────────────────────────────────────────────────────────
   const cleanup = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+
+    // Unsubscribe all per-call Firestore snapshot listeners
+    snapshotUnsubsRef.current.forEach((fn) => fn());
+    snapshotUnsubsRef.current = [];
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
-    if (pcRef.current) {
-      pcRef.current.close();
-      pcRef.current = null;
-    }
+    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
@@ -73,28 +127,53 @@ export function useWebRTC(roomId: string, userId: string | null) {
     setIsMinimized(false);
   }, []);
 
+  // Cleanup on hook unmount (component teardown)
+  useEffect(() => () => cleanup(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Timer ────────────────────────────────────────────────────────────────
   const startTimer = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => setCallDuration((d) => d + 1), 1000);
   }, []);
 
-  const getMedia = useCallback(async (type: CallType): Promise<MediaStream> => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: type === "video"
-        ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
-        : false,
-    });
-    localStreamRef.current = stream;
-    if (localVideoRef.current && type === "video") {
-      localVideoRef.current.srcObject = stream;
-      localVideoRef.current.play().catch(() => {});
+  // ─── Media access ─────────────────────────────────────────────────────────
+  const getMedia = useCallback(async (type: CallType): Promise<MediaStream | null> => {
+    setMediaError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: type === "video"
+          ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
+          : false,
+      });
+      localStreamRef.current = stream;
+      if (localVideoRef.current && type === "video") {
+        localVideoRef.current.srcObject = stream;
+        localVideoRef.current.play().catch(() => {});
+      }
+      return stream;
+    } catch (err) {
+      const e = err as DOMException;
+      let type: MediaErrorType = "unknown";
+      let message = "Could not access media devices.";
+      if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+        type = "permission-denied";
+        message = "Microphone/camera permission denied. Please allow access in your browser settings.";
+      } else if (e.name === "NotFoundError" || e.name === "DevicesNotFoundError") {
+        type = "no-device";
+        message = "No microphone or camera found. Please connect a device and try again.";
+      } else if (e.name === "OverconstrainedError") {
+        type = "overconstrained";
+        message = "Camera settings not supported by your device.";
+      }
+      setMediaError({ type, message });
+      return null;
     }
-    return stream;
   }, []);
 
+  // ─── PeerConnection factory ───────────────────────────────────────────────
   const createPeerConnection = useCallback((): RTCPeerConnection => {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const pc = new RTCPeerConnection(ICE_CONFIG);
     pcRef.current = pc;
 
     pc.ontrack = (event) => {
@@ -103,20 +182,23 @@ export function useWebRTC(roomId: string, userId: string | null) {
     };
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected") {
-        startTimer();
-        setCallStatus("connected");
-      }
+      if (pc.connectionState === "connected") { startTimer(); setCallStatus("connected"); }
       if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
-        endCall();
+        // Give WebRTC a few seconds to auto-recover before ending the call
+        setTimeout(() => {
+          if (pcRef.current?.connectionState === "disconnected" || pcRef.current?.connectionState === "failed") {
+            endCall();
+          }
+        }, 5000);
       }
     };
 
     return pc;
-  // endCall is defined below — ref-stable via useCallback; safe to omit here
+  // endCall defined below — ref-stable; safe to omit
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startTimer]);
 
+  // ─── End call ────────────────────────────────────────────────────────────
   const endCall = useCallback(async () => {
     const docId = callDocRef.current;
     cleanup();
@@ -129,24 +211,21 @@ export function useWebRTC(roomId: string, userId: string | null) {
     setCallStatus("idle");
   }, [cleanup, roomId]);
 
+  // ─── Start call (caller side) ─────────────────────────────────────────────
   const startCall = useCallback(
     async (type: CallType) => {
       if (!userId) return;
+      if (callStatus !== "idle") return; // prevent double-start
       setCallType(type);
       setCallStatus("calling");
 
-      let stream: MediaStream;
-      try {
-        stream = await getMedia(type);
-      } catch {
-        setCallStatus("idle");
-        return;
-      }
+      const stream = await getMedia(type);
+      if (!stream) { setCallStatus("idle"); return; }
+
       const pc = createPeerConnection();
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
-      // Per-call ICE candidate queue.
-      // answerCandidates may arrive before setRemoteDescription(answer) completes.
+      // Per-call ICE queue — candidates may arrive before setRemoteDescription
       const pendingAnswerCandidates: RTCIceCandidateInit[] = [];
       let remoteDescSet = false;
 
@@ -159,12 +238,8 @@ export function useWebRTC(roomId: string, userId: string | null) {
       });
       callDocRef.current = callDoc.id;
 
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: type === "video",
-      });
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: type === "video" });
       await pc.setLocalDescription(offer);
-
       await updateDoc(doc(db, "rooms", roomId, "calls", callDoc.id), {
         offer: { type: offer.type, sdp: offer.sdp },
       });
@@ -172,58 +247,54 @@ export function useWebRTC(roomId: string, userId: string | null) {
       pc.onicecandidate = async (e) => {
         if (e.candidate) {
           try {
-            await addDoc(
-              collection(db, "rooms", roomId, "calls", callDoc.id, "offerCandidates"),
-              e.candidate.toJSON()
-            );
+            await addDoc(collection(db, "rooms", roomId, "calls", callDoc.id, "offerCandidates"), e.candidate.toJSON());
           } catch {}
         }
       };
 
-      // Listen for answer-side ICE candidates — queue if remote desc not ready yet
-      onSnapshot(
+      // Answer-side ICE candidates — queue until remote desc is ready
+      const unsubCandidates = onSnapshot(
         collection(db, "rooms", roomId, "calls", callDoc.id, "answerCandidates"),
         (snap) => {
           snap.docChanges().forEach((change) => {
             if (change.type !== "added") return;
-            const candidate = change.doc.data() as RTCIceCandidateInit;
+            const cand = change.doc.data() as RTCIceCandidateInit;
             if (remoteDescSet) {
-              pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+              pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
             } else {
-              pendingAnswerCandidates.push(candidate);
+              pendingAnswerCandidates.push(cand);
             }
           });
         }
       );
+      snapshotUnsubsRef.current.push(unsubCandidates);
 
-      // Listen for answer from callee
+      // Answer listener — sets remote desc, flushes queue
       const unsubAnswer = onSnapshot(
         doc(db, "rooms", roomId, "calls", callDoc.id),
         async (snap) => {
           const data = snap.data();
           if (!data) return;
-
           if (data.answer && !pc.currentRemoteDescription) {
             try {
               await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-              // Mark ready and flush queued candidates
               remoteDescSet = true;
               for (const cand of pendingAnswerCandidates.splice(0)) {
                 pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
               }
             } catch {}
-            unsubAnswer();
           }
           if (data.status === "ended" || data.status === "rejected") {
             endCall();
-            unsubAnswer();
           }
         }
       );
+      snapshotUnsubsRef.current.push(unsubAnswer);
     },
-    [userId, roomId, getMedia, createPeerConnection, endCall]
+    [userId, roomId, callStatus, getMedia, createPeerConnection, endCall]
   );
 
+  // ─── Answer call (callee side) ─────────────────────────────────────────────
   const answerCall = useCallback(
     async (callId: string) => {
       if (!userId) return;
@@ -237,21 +308,15 @@ export function useWebRTC(roomId: string, userId: string | null) {
       setCallType(type);
       callDocRef.current = callId;
 
-      let stream: MediaStream;
-      try {
-        stream = await getMedia(type);
-      } catch {
-        setCallStatus("idle");
-        return;
-      }
+      const stream = await getMedia(type);
+      if (!stream) { setCallStatus("idle"); return; }
+
       const pc = createPeerConnection();
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
-      // Per-call ICE queue for offer candidates (from caller)
       const pendingOfferCandidates: RTCIceCandidateInit[] = [];
       let remoteDescSet = false;
 
-      // Set remote description from the stored offer
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
         remoteDescSet = true;
@@ -262,7 +327,6 @@ export function useWebRTC(roomId: string, userId: string | null) {
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
       await updateDoc(doc(db, "rooms", roomId, "calls", callId), {
         answer: { type: answer.type, sdp: answer.sdp },
         status: "connected",
@@ -271,28 +335,24 @@ export function useWebRTC(roomId: string, userId: string | null) {
       pc.onicecandidate = async (e) => {
         if (e.candidate) {
           try {
-            await addDoc(
-              collection(db, "rooms", roomId, "calls", callId, "answerCandidates"),
-              e.candidate.toJSON()
-            );
+            await addDoc(collection(db, "rooms", roomId, "calls", callId, "answerCandidates"), e.candidate.toJSON());
           } catch {}
         }
       };
 
-      // Listen for offer ICE candidates from the caller
-      onSnapshot(
+      // Offer-side ICE candidates from the caller
+      const unsubOfferCandidates = onSnapshot(
         collection(db, "rooms", roomId, "calls", callId, "offerCandidates"),
         (snap) => {
           snap.docChanges().forEach((change) => {
             if (change.type !== "added") return;
-            const candidate = change.doc.data() as RTCIceCandidateInit;
+            const cand = change.doc.data() as RTCIceCandidateInit;
             if (remoteDescSet) {
-              pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+              pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
             } else {
-              pendingOfferCandidates.push(candidate);
+              pendingOfferCandidates.push(cand);
             }
           });
-          // Flush if we somehow got here before remoteDescSet was marked true
           if (remoteDescSet && pendingOfferCandidates.length > 0) {
             for (const cand of pendingOfferCandidates.splice(0)) {
               pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
@@ -300,14 +360,14 @@ export function useWebRTC(roomId: string, userId: string | null) {
           }
         }
       );
+      snapshotUnsubsRef.current.push(unsubOfferCandidates);
 
-      // Listen for end signal from caller
-      onSnapshot(doc(db, "rooms", roomId, "calls", callId), (snap) => {
+      // End-signal from caller
+      const unsubEnd = onSnapshot(doc(db, "rooms", roomId, "calls", callId), (snap) => {
         const data = snap.data();
-        if (data?.status === "ended" || data?.status === "rejected") {
-          endCall();
-        }
+        if (data?.status === "ended" || data?.status === "rejected") endCall();
       });
+      snapshotUnsubsRef.current.push(unsubEnd);
 
       setCallStatus("connected");
       startTimer();
@@ -315,6 +375,7 @@ export function useWebRTC(roomId: string, userId: string | null) {
     [userId, roomId, getMedia, createPeerConnection, endCall, startTimer]
   );
 
+  // ─── Reject call ─────────────────────────────────────────────────────────
   const rejectCall = useCallback(
     async (callId: string) => {
       try {
@@ -325,11 +386,10 @@ export function useWebRTC(roomId: string, userId: string | null) {
     [roomId]
   );
 
-  // Incoming call listener
+  // ─── Incoming call listener ───────────────────────────────────────────────
   useEffect(() => {
     if (!userId || !roomId) return;
-    const callsRef = collection(db, "rooms", roomId, "calls");
-    const unsub = onSnapshot(callsRef, (snap) => {
+    const unsub = onSnapshot(collection(db, "rooms", roomId, "calls"), (snap) => {
       snap.docChanges().forEach((change) => {
         if (change.type === "added") {
           const data = change.doc.data();
@@ -346,10 +406,7 @@ export function useWebRTC(roomId: string, userId: string | null) {
         }
         if (change.type === "modified") {
           const data = change.doc.data();
-          if (
-            (data.status === "ended" || data.status === "rejected") &&
-            callDocRef.current === change.doc.id
-          ) {
+          if ((data.status === "ended" || data.status === "rejected") && callDocRef.current === change.doc.id) {
             cleanup();
             setCallStatus("idle");
           }
@@ -359,6 +416,7 @@ export function useWebRTC(roomId: string, userId: string | null) {
     return () => unsub();
   }, [userId, roomId, cleanup]);
 
+  // ─── Media controls ───────────────────────────────────────────────────────
   const toggleMute = useCallback(() => {
     localStreamRef.current?.getAudioTracks().forEach((t) => { t.enabled = !t.enabled; });
     setIsMuted((m) => !m);
@@ -373,15 +431,10 @@ export function useWebRTC(roomId: string, userId: string | null) {
     if (!localStreamRef.current || !pcRef.current) return;
     const oldTrack = localStreamRef.current.getVideoTracks()[0];
     if (!oldTrack) return;
-
     const currentFacing = oldTrack.getSettings().facingMode ?? "user";
     const nextFacing = currentFacing === "user" ? "environment" : "user";
-
     try {
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: nextFacing },
-        audio: false,
-      });
+      const newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: nextFacing }, audio: false });
       const newTrack = newStream.getVideoTracks()[0];
       const sender = pcRef.current.getSenders().find((s) => s.track?.kind === "video");
       if (sender) await sender.replaceTrack(newTrack);
@@ -390,26 +443,27 @@ export function useWebRTC(roomId: string, userId: string | null) {
       if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
       oldTrack.stop();
     } catch {
-      // Fallback to device enumeration
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices.filter((d) => d.kind === "videoinput");
-      if (cameras.length < 2) return;
-      const currentId = oldTrack.getSettings().deviceId;
-      const other = cameras.find((c) => c.deviceId !== currentId);
-      if (!other) return;
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: other.deviceId } },
-        audio: false,
-      });
-      const newTrack = newStream.getVideoTracks()[0];
-      const sender = pcRef.current.getSenders().find((s) => s.track?.kind === "video");
-      if (sender) await sender.replaceTrack(newTrack);
-      localStreamRef.current.removeTrack(oldTrack);
-      localStreamRef.current.addTrack(newTrack);
-      if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-      oldTrack.stop();
+      // Fallback: enumerate devices
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cameras = devices.filter((d) => d.kind === "videoinput");
+        if (cameras.length < 2) return;
+        const currentId = oldTrack.getSettings().deviceId;
+        const other = cameras.find((c) => c.deviceId !== currentId);
+        if (!other) return;
+        const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: other.deviceId } }, audio: false });
+        const newTrack = newStream.getVideoTracks()[0];
+        const sender = pcRef.current.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) await sender.replaceTrack(newTrack);
+        localStreamRef.current.removeTrack(oldTrack);
+        localStreamRef.current.addTrack(newTrack);
+        if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
+        oldTrack.stop();
+      } catch {}
     }
   }, []);
+
+  const dismissMediaError = useCallback(() => setMediaError(null), []);
 
   return {
     callStatus,
@@ -419,6 +473,8 @@ export function useWebRTC(roomId: string, userId: string | null) {
     callDuration,
     isMinimized,
     setIsMinimized,
+    mediaError,
+    dismissMediaError,
     localVideoRef,
     remoteVideoRef,
     remoteAudioRef,

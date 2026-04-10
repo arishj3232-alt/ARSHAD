@@ -23,6 +23,7 @@ import {
   Ghost,
   Eye,
   EyeOff,
+  WifiOff,
 } from "lucide-react";
 import { ref, set, onValue } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
@@ -30,7 +31,8 @@ import { cn, formatDate, formatLastSeen } from "@/lib/utils";
 import { useMessages } from "@/hooks/useMessages";
 import { useWebRTC } from "@/hooks/useWebRTC";
 import { useMediaUpload } from "@/hooks/useMediaUpload";
-import { useTypingIndicator, usePresence } from "@/hooks/useSession";
+import { useTypingIndicator, usePresence, useNetworkStatus } from "@/hooks/useSession";
+import { useRateLimit } from "@/hooks/useRateLimit";
 import { useCursorPresence } from "@/hooks/useCursorPresence";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useNotifications, sendPushNotification } from "@/hooks/useNotifications";
@@ -105,6 +107,8 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
   const { settings, updateSetting } = useAdmin();
   const { notify, toasts, showToast, dismissToast } = useNotifications(settings.notificationsEnabled, userId);
   const presence = usePresence(userId);
+  const { isConnected } = useNetworkStatus();
+  const { check: checkMsgRateLimit } = useRateLimit(5, 10_000); // max 5 messages per 10 s
 
   // Derive the other user from live presence — do NOT rely on the null otherId prop
   const otherUser = Object.values(presence).find((u) => u.id !== userId) ?? null;
@@ -198,7 +202,7 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
     callStatus, callType, isMuted, isCameraOff, callDuration,
     isMinimized, setIsMinimized, localVideoRef, remoteVideoRef, remoteAudioRef,
     startCall, answerCall, endCall, rejectCall, toggleMute, toggleCamera,
-    switchCamera, incomingCallId,
+    switchCamera, incomingCallId, mediaError, dismissMediaError,
   } = useWebRTC(ROOM_ID, userId);
 
   // ============================================================
@@ -346,6 +350,12 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
       return;
     }
 
+    // Rate limit: max 5 messages per 10 seconds
+    if (!checkMsgRateLimit()) {
+      showToast({ title: "Slow down", body: "Sending too fast — wait a moment", type: "text" });
+      return;
+    }
+
     setText("");
     setReplyTo(null);
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -358,7 +368,7 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
       replyToText: replyTo?.text?.slice(0, 80),
       ghost: ghostMode,
     });
-  }, [text, replyTo, sendMessage, setTyping, settings.messagingEnabled, triggerKeyword, ghostMode]);
+  }, [text, replyTo, sendMessage, setTyping, settings.messagingEnabled, triggerKeyword, ghostMode, checkMsgRateLimit, showToast]);
 
   const handleEditSubmit = useCallback(async () => {
     if (!editingMsg || !editText.trim()) return;
@@ -528,6 +538,14 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
         </div>
       )}
 
+      {/* Media permission error banner */}
+      {mediaError && (
+        <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-[350] flex items-start gap-3 px-4 py-3 bg-red-500/15 border border-red-500/30 rounded-2xl text-red-300 text-sm max-w-sm shadow-xl backdrop-blur-xl" style={{ animation: "toastIn 0.2s ease-out" }}>
+          <span className="flex-1">{mediaError.message}</span>
+          <button onClick={dismissMediaError} className="text-red-300/60 hover:text-red-300 transition flex-shrink-0 mt-0.5"><X className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+
       <div className="flex flex-col flex-1 min-w-0 h-full">
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 bg-[#0c0c16]/80 backdrop-blur-xl flex-shrink-0">
@@ -588,6 +606,14 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
             {settings.videoCallsEnabled && <HeaderBtn onClick={() => startCall("video")} testId="button-video-call"><Video className="w-4 h-4" /></HeaderBtn>}
           </div>
         </div>
+
+        {/* Network reconnection banner — shown when RTDB loses connection */}
+        {!isConnected && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20 text-yellow-300/80 text-xs flex-shrink-0">
+            <WifiOff className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>Connection lost — reconnecting…</span>
+          </div>
+        )}
 
         {/* Messages */}
         <div

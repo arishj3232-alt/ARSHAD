@@ -222,6 +222,25 @@ export function usePresence(_currentUserId: string | null) {
   return presence;
 }
 
+// ─── Network connection status (via RTDB .info/connected) ────────────────────
+
+export function useNetworkStatus() {
+  const [isConnected, setIsConnected] = useState(true); // optimistic default
+  const [wasDisconnected, setWasDisconnected] = useState(false);
+
+  useEffect(() => {
+    // Firebase RTDB exposes .info/connected — fires within ~30 s of network drop
+    const unsub = onValue(ref(rtdb, ".info/connected"), (snap) => {
+      const connected = snap.val() === true;
+      setIsConnected(connected);
+      if (!connected) setWasDisconnected(true);
+    });
+    return () => unsub();
+  }, []);
+
+  return { isConnected, wasDisconnected };
+}
+
 // ─── useTypingIndicator ───────────────────────────────────────────────────────
 
 export function useTypingIndicator(roomId: string, userId: string | null) {
