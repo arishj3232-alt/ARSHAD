@@ -179,6 +179,19 @@ export function useWebRTC(roomId: string, userId: string | null) {
     pc.ontrack = (event) => {
       const stream = event.streams[0] ?? new MediaStream([event.track]);
       setRemoteStream(stream);
+
+      // Belt-and-suspenders: assign directly too, in case the React effect
+      // runs before the audio/video elements are in the DOM.
+      requestAnimationFrame(() => {
+        if (remoteAudioRef.current) {
+          remoteAudioRef.current.srcObject = stream;
+          remoteAudioRef.current.play().catch(() => {});
+        }
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = stream;
+          remoteVideoRef.current.play().catch(() => {});
+        }
+      });
     };
 
     pc.onconnectionstatechange = () => {

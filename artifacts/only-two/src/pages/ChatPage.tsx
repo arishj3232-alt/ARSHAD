@@ -583,20 +583,20 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
             </div>
           )}
 
-          {/* Own DP */}
-          <div className="relative mr-1">
+          {/* Own DP — camera icon button (no avatar circle to avoid visual duplicates) */}
+          <div className="relative flex-shrink-0">
             <input ref={dpInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }} />
-            <button onClick={() => dpInputRef.current?.click()} className="w-7 h-7 rounded-full overflow-hidden bg-gradient-to-br from-violet-500 to-pink-600 flex items-center justify-center shadow relative group" title="Tap to change profile picture">
-              {profile.dpUrl ? (
-                <img src={profile.dpUrl} alt="You" className="w-full h-full object-cover" />
+            <button
+              onClick={() => dpInputRef.current?.click()}
+              className="p-1.5 rounded-xl hover:bg-white/10 text-white/30 hover:text-white/70 transition relative"
+              title={profile.dpUrl ? "Change your profile picture" : "Set your profile picture"}
+            >
+              {dpUploading ? (
+                <div className="w-4 h-4 border-2 border-pink-500 border-t-transparent rounded-full animate-spin" />
               ) : (
-                <span className="text-white font-bold text-xs">{userName[0]?.toUpperCase() ?? "Y"}</span>
+                <Camera className="w-4 h-4" />
               )}
-              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center rounded-full">
-                <Camera className="w-3 h-3 text-white" />
-              </div>
             </button>
-            {dpUploading && <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin" />}
           </div>
 
           <div className="flex items-center gap-0.5">
@@ -829,6 +829,15 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
           <GalleryPanel mediaMessages={mediaMessages} loading={loading} onClose={() => setPanel("none")} />
         </div>
       )}
+
+      {/* Remote audio — always in the DOM so it is never unmounted mid-call.
+           srcObject is assigned by useWebRTC's effect and the ontrack direct fallback. */}
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        style={{ display: "none" }}
+      />
 
       <CallOverlay
         callStatus={callStatus} callType={callType} isMuted={isMuted} isCameraOff={isCameraOff}

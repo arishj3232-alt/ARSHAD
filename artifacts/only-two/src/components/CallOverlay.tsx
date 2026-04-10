@@ -113,15 +113,6 @@ export default function CallOverlay({
 
   return (
     <>
-      {/* Hidden audio element — always present during a call to play remote audio */}
-      <audio
-        ref={remoteAudioRef}
-        autoPlay
-        playsInline
-        muted={isSpeakerOff}
-        style={{ display: "none" }}
-      />
-
       {callStatus === "incoming" && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center">
           <div className="text-center animate-scale-in px-8">

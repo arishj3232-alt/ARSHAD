@@ -1,0 +1,221 @@
+Fix WebRTC media pipeline AND correct header UI layout. The system connects but audio/video is not flowing, and the header shows incorrect duplicate profile elements.
+
+---
+
+1. HEADER UI FIX (CRITICAL UX ISSUE)
+
+---
+
+Problem:
+
+* Duplicate avatars shown
+* Floating DP in wrong position
+* Fallback avatar ("A") visible even when DP exists
+
+Fix:
+
+* REMOVE any floating profile image outside header
+* REMOVE fallback avatar if DP exists
+
+Header layout must be:
+
+[ DP ]  [ Name ]
+[ Status ]
+
+Implementation:
+
+<div className="header">
+  <img src={otherUser.dp} className="avatar" />
+
+  <div className="info">
+    <div className="name">{otherUser.name}</div>
+    <div className="status">
+      {typing ? "Typing..." : statusText}
+    </div>
+  </div>
+</div>
+
+Fallback ONLY if no DP:
+
+{!otherUser.dp && (
+
+  <div className="avatar-fallback">
+    {otherUser.name[0]}
+  </div>
+)}
+
+CSS:
+
+.header {
+display: flex;
+align-items: center;
+gap: 10px;
+}
+
+.avatar {
+width: 40px;
+height: 40px;
+border-radius: 50%;
+}
+
+REMOVE:
+
+* Any absolute positioned avatar
+* Any duplicate profile UI
+* Any top-left floating DP
+
+---
+
+2. VERIFY MEDIA CAPTURE (SOURCE)
+
+---
+
+Ensure getUserMedia returns tracks:
+
+console.log(stream.getTracks())
+
+Must include audio + video tracks
+
+---
+
+3. ADD TRACKS TO PEER CONNECTION
+
+---
+
+stream.getTracks().forEach(track => {
+peerConnection.addTrack(track, stream);
+});
+
+---
+
+4. FIX ontrack HANDLING (MAIN BUG)
+
+---
+
+DO NOT assign directly inside ontrack.
+
+Instead:
+
+setRemoteStream(event.streams[0]);
+
+useEffect(() => {
+if (remoteVideoRef.current && remoteStream) {
+remoteVideoRef.current.srcObject = remoteStream;
+}
+
+if (remoteAudioRef.current && remoteStream) {
+remoteAudioRef.current.srcObject = remoteStream;
+}
+}, [remoteStream]);
+
+---
+
+5. ALWAYS RENDER AUDIO ELEMENT
+
+---
+
+<audio ref={remoteAudioRef} autoPlay playsInline />
+
+---
+
+6. AUTOPLAY FIX
+
+---
+
+await remoteAudioRef.current.play().catch(() => {});
+
+---
+
+7. ICE CANDIDATE QUEUE (MANDATORY)
+
+---
+
+If remoteDescription not set:
+
+* store candidates
+* apply after setRemoteDescription
+
+---
+
+8. SIGNALING ORDER
+
+---
+
+Caller:
+
+* createOffer
+* setLocalDescription
+* send offer
+
+Answerer:
+
+* setRemoteDescription
+* createAnswer
+* setLocalDescription
+* send answer
+
+Caller:
+
+* setRemoteDescription(answer)
+* then apply ICE
+
+---
+
+9. TURN SERVER (REQUIRED)
+
+---
+
+iceServers:
+
+[
+{ urls: "stun:stun.l.google.com:19302" },
+{
+urls: "turn:relay.metered.ca:80",
+username: "openrelayproject",
+credential: "openrelayproject"
+}
+]
+
+---
+
+10. VIDEO ELEMENT FIX
+
+---
+
+<video
+ref={remoteVideoRef}
+autoPlay
+playsInline
+/>
+
+---
+
+11. DEBUG CHECKPOINTS
+
+---
+
+Verify:
+
+* stream.getTracks().length > 0
+* getSenders().length > 0
+* ontrack fires
+* remoteStream exists
+* srcObject assigned
+* connectionState = "connected"
+
+---
+
+## FINAL RESULT
+
+✔ Header shows correct DP (no duplicates)
+✔ No floating avatar
+✔ Name + status aligned properly
+✔ Audio plays
+✔ Video renders
+✔ No black screen
+✔ Works across networks
+
+Focus on BOTH:
+
+* Media pipeline correctness
+* Clean UI structure
