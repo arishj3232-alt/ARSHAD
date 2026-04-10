@@ -84,5 +84,17 @@ export function useProfile(userId: string | null) {
     [allProfiles]
   );
 
-  return { profile, uploading, toast, uploadDp, getDpUrl };
+  const deleteDp = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const cleared: UserProfile = { dpUrl: null, dpHash: null };
+      await set(ref(rtdb, `profiles/${userId}`), cleared);
+      setProfile(cleared);
+      showToast("Profile picture removed");
+    } catch {
+      showToast("Failed to remove — try again");
+    }
+  }, [userId]);
+
+  return { profile, uploading, toast, uploadDp, deleteDp, getDpUrl };
 }

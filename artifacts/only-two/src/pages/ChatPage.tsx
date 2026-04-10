@@ -18,7 +18,6 @@ import {
   Video as VideoIcon,
   Plus,
   Paperclip,
-  Camera,
   Check,
   Ghost,
   Eye,
@@ -116,7 +115,7 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
   const otherName = otherUser?.name
     ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
 
-  const { profile, uploading: dpUploading, toast: dpToast, uploadDp, getDpUrl } = useProfile(userId);
+  const { profile, uploading: dpUploading, toast: dpToast, uploadDp, deleteDp, getDpUrl } = useProfile(userId);
   const otherDpUrl = resolvedOtherId ? getDpUrl(resolvedOtherId) : null;
 
   const { setStatus: setMyStatus } = useUserStatus(userId);
@@ -549,15 +548,48 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
       <div className="flex flex-col flex-1 min-w-0 h-full">
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 bg-[#0c0c16]/80 backdrop-blur-xl flex-shrink-0">
+          {/* YOUR profile picture — single avatar in header, clickable to upload */}
           <div className="relative flex-shrink-0">
-            <div className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20">
-              {otherDpUrl ? (
-                <img src={otherDpUrl} alt={otherName} className="w-full h-full object-cover" />
+            <input
+              ref={dpInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }}
+            />
+            <button
+              onClick={() => dpInputRef.current?.click()}
+              title={profile.dpUrl ? "Tap to change your profile picture" : "Tap to set your profile picture"}
+              className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20 relative"
+            >
+              {profile.dpUrl ? (
+                <img src={profile.dpUrl} alt={userName} className="w-full h-full object-cover" />
               ) : (
-                <span className="text-white font-bold text-sm">{otherName[0]?.toUpperCase() ?? "?"}</span>
+                <span className="text-white font-bold text-sm select-none">{userName[0]?.toUpperCase() ?? "?"}</span>
               )}
-            </div>
-            <div className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)} title={statusDot.label} />
+            </button>
+
+            {/* Upload progress ring */}
+            {dpUploading && (
+              <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin pointer-events-none" />
+            )}
+
+            {/* Delete DP button — only when a picture is set */}
+            {profile.dpUrl && !dpUploading && (
+              <button
+                onClick={(e) => { e.stopPropagation(); deleteDp(); }}
+                title="Remove profile picture"
+                className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center shadow transition z-10"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            )}
+
+            {/* Other user's online status dot */}
+            <div
+              className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)}
+              title={statusDot.label}
+            />
           </div>
 
           <div className="flex-1 min-w-0">
@@ -582,22 +614,6 @@ export default function ChatPage({ userId, userName, otherId, onForceLogout }: P
               <EyeOff className="w-4 h-4" />
             </div>
           )}
-
-          {/* Own DP — camera icon button (no avatar circle to avoid visual duplicates) */}
-          <div className="relative flex-shrink-0">
-            <input ref={dpInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }} />
-            <button
-              onClick={() => dpInputRef.current?.click()}
-              className="p-1.5 rounded-xl hover:bg-white/10 text-white/30 hover:text-white/70 transition relative"
-              title={profile.dpUrl ? "Change your profile picture" : "Set your profile picture"}
-            >
-              {dpUploading ? (
-                <div className="w-4 h-4 border-2 border-pink-500 border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <Camera className="w-4 h-4" />
-              )}
-            </button>
-          </div>
 
           <div className="flex items-center gap-0.5">
             <HeaderBtn onClick={() => setPanel(panel === "search" ? "none" : "search")} active={panel === "search"} testId="button-search"><Search className="w-4 h-4" /></HeaderBtn>

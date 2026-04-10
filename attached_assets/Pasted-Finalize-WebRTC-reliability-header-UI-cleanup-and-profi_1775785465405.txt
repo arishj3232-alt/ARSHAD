@@ -1,0 +1,175 @@
+Finalize WebRTC reliability, header UI cleanup, and profile (DP) system.
+
+---
+
+1. HEADER UI CLEANUP (STRICT)
+
+---
+
+* REMOVE camera icon from top-right completely
+* REMOVE any duplicate avatar UI
+* Only ONE avatar must exist → LEFT side
+
+Final layout:
+
+[ DP ]  [ Name ]
+[ Status ]
+
+---
+
+2. PROFILE (DP) SYSTEM — FULL IMPLEMENTATION
+
+---
+
+A. Display DP
+
+* Show user's profile picture in header (left side)
+* If no DP → show fallback avatar (first letter of username)
+
+Example:
+
+{user.dp ? ( <img src={user.dp} className="avatar" />
+) : (
+
+  <div className="avatar-fallback">
+    {user.name[0]}
+  </div>
+)}
+
+---
+
+## B. Upload DP (ONLY ONE ACTION)
+
+* Clicking the DP should open file picker
+* User can upload ONLY ONE image at a time
+* Re-upload allowed only if it's a DIFFERENT image
+
+---
+
+## C. PREVENT DUPLICATE IMAGE UPLOAD
+
+Use browser hashing:
+
+async function hashFile(file) {
+const buffer = await file.arrayBuffer();
+const hash = await crypto.subtle.digest("SHA-256", buffer);
+return Array.from(new Uint8Array(hash))
+.map(b => b.toString(16).padStart(2, "0"))
+.join("");
+}
+
+* Store lastDpHash
+* If new hash === old hash → reject upload
+
+---
+
+## D. DELETE DP FEATURE
+
+* Add option: "Remove profile picture"
+* When deleted:
+  user.dp = null
+  user.lastDpHash = null
+
+UI:
+
+* Immediately show fallback avatar
+
+---
+
+## E. USERNAME DISPLAY
+
+* Always show actual username (NOT "Them")
+* Fallback only if not loaded → "Connecting..."
+
+---
+
+3. WEBRTC MEDIA PIPELINE FINALIZATION
+
+---
+
+A. Always-mounted audio element
+
+* Render <audio ref={remoteAudioRef} autoPlay /> in ChatPage
+* NEVER inside conditional components
+
+---
+
+## B. Dual stream binding (CRITICAL)
+
+Inside ontrack:
+
+setRemoteStream(stream);
+
+requestAnimationFrame(() => {
+if (remoteVideoRef.current) {
+remoteVideoRef.current.srcObject = stream;
+}
+
+if (remoteAudioRef.current) {
+remoteAudioRef.current.srcObject = stream;
+remoteAudioRef.current.play().catch(() => {});
+}
+});
+
+---
+
+C. Also bind via useEffect
+
+useEffect(() => {
+if (remoteStream) {
+remoteVideoRef.current.srcObject = remoteStream;
+remoteAudioRef.current.srcObject = remoteStream;
+}
+}, [remoteStream]);
+
+---
+
+## D. ICE QUEUE
+
+* Queue ICE candidates until remoteDescription is set
+* Flush after setRemoteDescription
+
+---
+
+## E. TURN SERVER
+
+Ensure TURN is included for real-world connectivity
+
+---
+
+4. VIDEO ELEMENT FIX
+
+---
+
+<video
+ref={remoteVideoRef}
+autoPlay
+playsInline
+/>
+
+---
+
+5. FINAL VALIDATION CHECKLIST
+
+---
+
+✔ Only ONE avatar in header (left side)
+✔ Camera icon removed
+✔ DP clickable to upload
+✔ Same image upload blocked
+✔ DP deletion works
+✔ Fallback avatar shown correctly
+✔ Username displayed correctly
+✔ Audio plays reliably
+✔ Video renders
+✔ No black screen
+✔ No duplicate UI elements
+
+---
+
+## GOAL
+
+* Clean WhatsApp-level header UI
+* Fully functional DP system
+* Stable WebRTC media pipeline
+* No lifecycle or UI inconsistencies
