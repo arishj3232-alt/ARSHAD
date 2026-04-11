@@ -2,11 +2,60 @@ import * as admin from "firebase-admin";
 import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import * as logger from "firebase-functions/logger";
 import { getCallerAvatarUrl } from "./callerProfile";
-import { sendCallNotification, sendMissedCallNotification } from "./sendNotification";
+import { sendCallNotification, sendChatNotification, sendMissedCallNotification } from "./sendNotification";
 
 if (!admin.apps.length) {
   admin.initializeApp();
 }
+
+function previewChatBody(data: Record<string, unknown>): string {
+  const t = (data.type as string) || "text";
+  if (t === "image") return "Photo";
+  if (t === "video") return "Video";
+  if (t === "audio") return "Voice message";
+  const text = (data.text as string | undefined)?.trim();
+  if (text) {
+    return text.length > 120 ? `${text.slice(0, 117)}...` : text;
+  }
+  return "New message";
+}
+
+/** New chat message → data-only FCM so the web client always receives `onMessage` in the foreground. */
+export const onChatMessageCreatedNotifyRecipient = onDocumentCreated(
+  "rooms/{roomId}/messages/{messageId}",
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data() as Record<string, unknown>;
+
+    if (data.ghost === true) return;
+    if (data.deleted === true) return;
+    const msgType = (data.type as string) || "text";
+    if (msgType === "call") return;
+
+    const senderId = data.senderId as string | undefined;
+    if (!senderId) return;
+
+    const roomId = event.params.roomId;
+    const presenceSnap = await admin.firestore().collection("rooms").doc(roomId).collection("presence").get();
+    const recipientId = presenceSnap.docs.find((d) => d.id !== senderId)?.id;
+    if (!recipientId) {
+      logger.warn("No recipient in presence for chat push", { roomId, senderId });
+      return;
+    }
+
+    const senderDoc = presenceSnap.docs.find((d) => d.id === senderId);
+    const senderName = (senderDoc?.data()?.name as string)?.trim() || "Someone";
+    const title = `New message from ${senderName}`;
+    const body = previewChatBody(data);
+
+    try {
+      await sendChatNotification(recipientId, title, body);
+    } catch (e) {
+      logger.error("sendChatNotification failed", e);
+    }
+  }
+);
 
 /**
  * When a caller creates a Firestore call doc, notify the other member of the room
@@ -38,9 +87,13 @@ export const onCallCreatedNotifyCallee = onDocumentCreated(
 
     const callType = (data.type as string) || "audio";
 
+    const callerDoc = presenceSnap.docs.find((d) => d.id === callerId);
+    const callerName = (callerDoc?.data()?.name as string)?.trim() || "Someone";
+    const pushTitle = callType === "video" ? "Incoming video call" : "Incoming Call";
+    const pushBody = `${callerName} is calling`;
+
     try {
-      const pushTitle = callType === "video" ? "Incoming video call" : "Incoming Call";
-      await sendCallNotification(calleeId, pushTitle, "Tap to answer", {
+      await sendCallNotification(calleeId, pushTitle, pushBody, {
         roomId,
         callId: event.params.callId,
         callerId,
