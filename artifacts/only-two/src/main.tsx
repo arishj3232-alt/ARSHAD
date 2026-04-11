@@ -5,7 +5,7 @@ import {
   MissingEnvScreen,
   BootErrorScreen,
 } from "./envGate";
-
+console.log("ENV CHECK:", import.meta.env);
 const rootEl = document.getElementById("root")!;
 const root = createRoot(rootEl);
 const missing = getMissingFirebaseEnvKeys();
