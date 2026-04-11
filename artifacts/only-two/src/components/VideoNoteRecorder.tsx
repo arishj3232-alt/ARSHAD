@@ -1,6 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Video, Send, X } from "lucide-react";
+import { Video, Send, X, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+function stopStream(stream: MediaStream | null) {
+  stream?.getTracks().forEach((t) => t.stop());
+}
 
 type Props = {
   onSend: (blob: Blob) => void;
@@ -15,6 +19,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -24,27 +29,81 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
   const MAX_SECONDS = 60;
 
   useEffect(() => {
-    return () => stopPreview();
+    return () => {
+      const s = streamRef.current;
+      if (s) {
+        s.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+  }, []);
+
+  const acquireStream = useCallback(async (facing: "user" | "environment") => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: facing },
+      audio: true,
+    });
+    streamRef.current = stream;
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.muted = true;
+    }
+    return stream;
   }, []);
 
   useEffect(() => {
-    if (seconds >= MAX_SECONDS && recording) stop();
-  }, [seconds, recording]);
+    if (disabled) {
+      stopStream(streamRef.current);
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      setPreviewReady(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        await acquireStream("user");
+        if (cancelled) {
+          stopStream(streamRef.current);
+          streamRef.current = null;
+          return;
+        }
+        setFacingMode("user");
+        setPermissionError(null);
+        setPreviewReady(true);
+      } catch (err) {
+        if (cancelled) return;
+        const e = err as DOMException;
+        if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+          setPermissionError("Camera/Microphone access denied. Please allow permissions.");
+        } else {
+          setPermissionError("Camera/Microphone unavailable on this device.");
+        }
+        setPreviewReady(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      stopStream(streamRef.current);
+      streamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+  }, [disabled, acquireStream]);
 
-  const startPreview = async () => {
+  const startPreview = useCallback(async () => {
     if (streamRef.current) return true;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
+      await acquireStream(facingMode);
       setPermissionError(null);
-      streamRef.current = stream;
       setPreviewReady(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true;
-      }
       return true;
     } catch (err) {
       const e = err as DOMException;
@@ -56,14 +115,32 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
       setPreviewReady(false);
       return false;
     }
-  };
+  }, [acquireStream, facingMode]);
 
   const stopPreview = () => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    stopStream(streamRef.current);
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setPreviewReady(false);
   };
+
+  const flipCamera = useCallback(async () => {
+    if (disabled || recording || videoBlob || !streamRef.current) return;
+    const next = facingMode === "user" ? "environment" : "user";
+    try {
+      await acquireStream(next);
+      setFacingMode(next);
+      setPermissionError(null);
+      setPreviewReady(true);
+    } catch (err) {
+      const e = err as DOMException;
+      if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+        setPermissionError("Camera/Microphone access denied. Please allow permissions.");
+      } else {
+        setPermissionError("Could not switch camera.");
+      }
+    }
+  }, [disabled, recording, videoBlob, facingMode, acquireStream]);
 
   const start = useCallback(async () => {
     if (disabled) return;
@@ -84,7 +161,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
     setRecording(true);
     setSeconds(0);
     timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-  }, [disabled]);
+  }, [disabled, startPreview]);
 
   const stop = useCallback(() => {
     mediaRecorderRef.current?.stop();
@@ -93,6 +170,10 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
     timerRef.current = null;
     setRecording(false);
   }, []);
+
+  useEffect(() => {
+    if (seconds >= MAX_SECONDS && recording) stop();
+  }, [seconds, recording, stop]);
 
   const cancel = () => {
     stop();
@@ -149,7 +230,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
               autoPlay
               playsInline
               muted
-              className="w-full h-full object-cover scale-x-[-1]"
+              className={cn("w-full h-full object-cover", facingMode === "user" && "scale-x-[-1]")}
             />
           ) : previewUrl ? (
             <video
@@ -177,6 +258,18 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
         >
           <X className="w-4 h-4" />
         </button>
+
+        {!videoBlob && !recording && previewReady && (
+          <button
+            type="button"
+            onClick={() => void flipCamera()}
+            disabled={disabled}
+            className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition disabled:opacity-40"
+            title="Flip camera"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        )}
 
         {!videoBlob ? (
           <button

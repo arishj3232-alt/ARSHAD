@@ -35,6 +35,8 @@ export type Message = {
   mediaUrl?: string;
   originalText?: string;
   originalMediaUrl?: string;
+  /** Preserved for delete + admin reveal (image | video | audio). */
+  originalMediaType?: "image" | "video" | "audio" | null;
   replyToId?: string;
   replyToText?: string;
   deleted: boolean;
@@ -53,9 +55,61 @@ export type Message = {
   createdAt: Date | null;
   /** WhatsApp-style delivery ticks (derived + stored). */
   receiptStatus: ReceiptStatus;
+  /** Client-only: optimistic send in flight. */
+  localStatus?: "sending";
 };
 
 const PAGE_SIZE = 20;
+
+function buildOutgoingMessageDoc(
+  currentUserId: string,
+  payload: {
+    type: MessageType;
+    callType?: CallMediaType;
+    callStatus?: CallMessageStatus;
+    duration?: number;
+    text?: string;
+    mediaUrl?: string;
+    replyToId?: string;
+    replyToText?: string;
+    viewOnce?: boolean;
+    ghost?: boolean;
+  }
+): Record<string, unknown> {
+  const text = payload.text ?? null;
+  const mediaUrl = payload.mediaUrl ?? null;
+  const originalMediaType: Message["originalMediaType"] =
+    payload.type === "image" || payload.type === "video" || payload.type === "audio" ? payload.type : null;
+  return {
+    senderId: currentUserId,
+    type: payload.type,
+    callType: payload.callType ?? null,
+    callStatus: payload.callStatus ?? null,
+    duration: typeof payload.duration === "number" ? payload.duration : null,
+    text,
+    mediaUrl,
+    originalText: text,
+    originalMediaUrl: mediaUrl,
+    originalMediaType,
+    replyToId: payload.replyToId ?? null,
+    replyToText: payload.replyToText ?? null,
+    deleted: false,
+    deletedForEveryone: false,
+    deletedFor: {},
+    seen: false,
+    delivered: false,
+    receiptStatus: "sent",
+    viewOnce: payload.viewOnce ?? false,
+    viewOnceViewed: false,
+    openedBy: [],
+    openedAt: null,
+    expiresAt: null,
+    ghost: payload.ghost ?? false,
+    edited: false,
+    reactions: {},
+    createdAt: serverTimestamp(),
+  };
+}
 
 function deriveReceiptStatus(data: Record<string, unknown>): ReceiptStatus {
   const r = data.receiptStatus;
@@ -75,6 +129,7 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     mediaUrl: data.mediaUrl as string | undefined,
     originalText: data.originalText as string | undefined,
     originalMediaUrl: data.originalMediaUrl as string | undefined,
+    originalMediaType: (data.originalMediaType as Message["originalMediaType"]) ?? null,
     replyToId: data.replyToId as string | undefined,
     replyToText: data.replyToText as string | undefined,
     deleted: (data.deleted as boolean) ?? false,
@@ -111,6 +166,7 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
   /** Older pages loaded via pagination (prepended); not replaced when the live tail snapshot updates. */
   const olderLoadedRef = useRef<Message[]>([]);
   const latestWindowRef = useRef<Message[]>([]);
+  const originalsBackfillRef = useRef(new Set<string>());
 
   useEffect(() => {
     if (!roomId) return undefined;
@@ -138,6 +194,32 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
 
     return () => unsub();
   }, [roomId]);
+
+  useEffect(() => {
+    if (!roomId || !currentUserId) return;
+    for (const m of messages) {
+      if (originalsBackfillRef.current.has(m.id)) continue;
+      const mediaUrl = typeof m.mediaUrl === "string" ? m.mediaUrl.trim() : "";
+      if (!mediaUrl) continue;
+      if (m.type !== "image" && m.type !== "video" && m.type !== "audio") continue;
+      const hasOrigUrl = !!(m.originalMediaUrl && String(m.originalMediaUrl).trim());
+      const hasOrigType =
+        m.originalMediaType === "image" || m.originalMediaType === "video" || m.originalMediaType === "audio";
+      if (hasOrigUrl && hasOrigType) continue;
+      originalsBackfillRef.current.add(m.id);
+      const coalescedUrl = (m.originalMediaUrl && String(m.originalMediaUrl).trim()) || mediaUrl;
+      const coalescedType =
+        m.originalMediaType === "image" || m.originalMediaType === "video" || m.originalMediaType === "audio"
+          ? m.originalMediaType
+          : m.type;
+      void updateDoc(doc(db, "rooms", roomId, "messages", m.id), {
+        originalMediaUrl: coalescedUrl,
+        originalMediaType: coalescedType,
+      }).catch(() => {
+        originalsBackfillRef.current.delete(m.id);
+      });
+    }
+  }, [messages, roomId, currentUserId]);
 
   const loadMore = useCallback(async () => {
     if (!oldestDocRef.current || loadingMore || !hasMore) return;
@@ -173,36 +255,13 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
       replyToText?: string;
       viewOnce?: boolean;
       ghost?: boolean;
-    }) => {
-      if (!currentUserId) return;
-      await addDoc(collection(db, "rooms", roomId, "messages"), {
-        senderId: currentUserId,
-        type: payload.type,
-        callType: payload.callType ?? null,
-        callStatus: payload.callStatus ?? null,
-        duration: typeof payload.duration === "number" ? payload.duration : null,
-        text: payload.text ?? null,
-        mediaUrl: payload.mediaUrl ?? null,
-        originalText: payload.text ?? null,
-        originalMediaUrl: payload.mediaUrl ?? null,
-        replyToId: payload.replyToId ?? null,
-        replyToText: payload.replyToText ?? null,
-        deleted: false,
-        deletedForEveryone: false,
-        deletedFor: {},
-        seen: false,
-        delivered: false,
-        receiptStatus: "sent",
-        viewOnce: payload.viewOnce ?? false,
-        viewOnceViewed: false,
-        openedBy: [],
-        openedAt: null,
-        expiresAt: null,
-        ghost: payload.ghost ?? false,
-        edited: false,
-        reactions: {},
-        createdAt: serverTimestamp(),
-      });
+    }): Promise<string | null> => {
+      if (!currentUserId) return null;
+      const ref = await addDoc(
+        collection(db, "rooms", roomId, "messages"),
+        buildOutgoingMessageDoc(currentUserId, payload)
+      );
+      return ref.id;
     },
     [roomId, currentUserId]
   );
@@ -211,7 +270,8 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
     async (messageId: string, newText: string) => {
       if (!currentUserId || !newText.trim()) return;
       const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, { text: newText.trim(), edited: true });
+      const t = newText.trim();
+      await updateDoc(r, { text: t, edited: true, originalText: t });
     },
     [roomId, currentUserId]
   );
@@ -233,6 +293,10 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
       const data = snap.data() as Record<string, unknown> | undefined;
       const existingText = typeof data?.text === "string" ? data.text : "";
       const existingMedia = typeof data?.mediaUrl === "string" ? data.mediaUrl : "";
+      const msgType = data?.type as MessageType | undefined;
+      const inferredMediaType: Message["originalMediaType"] =
+        msgType === "image" || msgType === "video" || msgType === "audio" ? msgType : null;
+      const existingOrigType = data?.originalMediaType as Message["originalMediaType"] | undefined;
       const patch: Record<string, unknown> = {
         deleted: true,
         deletedForEveryone: true,
@@ -246,6 +310,10 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
           data?.originalMediaUrl != null && String(data.originalMediaUrl).length > 0
             ? data.originalMediaUrl
             : existingMedia || "",
+        originalMediaType:
+          existingOrigType === "image" || existingOrigType === "video" || existingOrigType === "audio"
+            ? existingOrigType
+            : inferredMediaType,
       };
       await updateDoc(r, patch);
     },

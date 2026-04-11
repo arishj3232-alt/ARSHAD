@@ -12,23 +12,36 @@ export type UserActivityStatus =
 const STATUS_DEBOUNCE_MS = 180;
 const STATUS_STALE_MS = 75_000;
 
+export type RecordingKind = "audio" | "video";
+
 export function useUserStatus(roomCode: string, userId: string | null) {
   const pendingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStatusRef = useRef<UserActivityStatus | null>(null);
+  const lastRecordingKindRef = useRef<RecordingKind | null | undefined>(undefined);
   const lastWriteAtRef = useRef(0);
   const disconnectRef = useRef<{ cancel: () => void } | null>(null);
 
   const setStatus = useCallback(
-    (status: UserActivityStatus) => {
+    (status: UserActivityStatus, opts?: { recordingKind?: RecordingKind | null }) => {
       if (!userId || !roomCode) return;
-      if (lastStatusRef.current === status && Date.now() - lastWriteAtRef.current < 15_000) {
+      const recordingKind = status === "recording" ? opts?.recordingKind ?? null : null;
+      if (
+        lastStatusRef.current === status &&
+        lastRecordingKindRef.current === recordingKind &&
+        Date.now() - lastWriteAtRef.current < 15_000
+      ) {
         return;
       }
       if (pendingTimeoutRef.current) clearTimeout(pendingTimeoutRef.current);
       pendingTimeoutRef.current = setTimeout(() => {
         try {
-          set(ref(rtdb, `status/${roomCode}/${userId}`), { status, ts: Date.now() }).catch(() => {});
+          set(ref(rtdb, `status/${roomCode}/${userId}`), {
+            status,
+            ts: Date.now(),
+            recordingKind,
+          }).catch(() => {});
           lastStatusRef.current = status;
+          lastRecordingKindRef.current = recordingKind;
           lastWriteAtRef.current = Date.now();
         } catch {}
       }, STATUS_DEBOUNCE_MS);
@@ -42,7 +55,7 @@ export function useUserStatus(roomCode: string, userId: string | null) {
     try {
       disconnectRef.current?.cancel();
       const d = onDisconnect(statusRef);
-      d.set({ status: "offline", ts: serverTimestamp() }).catch(() => {});
+      d.set({ status: "offline", ts: serverTimestamp(), recordingKind: null }).catch(() => {});
       disconnectRef.current = d;
     } catch {}
     setStatus("online");
@@ -59,6 +72,7 @@ export function useUserStatus(roomCode: string, userId: string | null) {
 
 export function useOtherUserStatus(roomCode: string, otherId: string | null) {
   const [otherStatus, setOtherStatus] = useState<UserActivityStatus>("offline");
+  const [otherRecordingKind, setOtherRecordingKind] = useState<RecordingKind | null>(null);
 
   useEffect(() => {
     if (!otherId || !roomCode) return undefined;
@@ -66,15 +80,22 @@ export function useOtherUserStatus(roomCode: string, otherId: string | null) {
       const unsub = onValue(
         ref(rtdb, `status/${roomCode}/${otherId}`),
         (snap) => {
-          const data = snap.val();
+          const data = snap.val() as {
+            status?: UserActivityStatus;
+            ts?: number;
+            recordingKind?: string | null;
+          } | null;
           const ts = typeof data?.ts === "number" ? data.ts : 0;
           const stale = ts > 0 && Date.now() - ts > STATUS_STALE_MS;
           if (stale) {
             setOtherStatus("offline");
+            setOtherRecordingKind(null);
             return;
           }
           if (data?.status) setOtherStatus(data.status as UserActivityStatus);
           else setOtherStatus("offline");
+          const rk = data?.recordingKind;
+          setOtherRecordingKind(rk === "video" || rk === "audio" ? rk : null);
         },
         () => {}
       );
@@ -84,5 +105,5 @@ export function useOtherUserStatus(roomCode: string, otherId: string | null) {
     }
   }, [roomCode, otherId]);
 
-  return otherStatus;
+  return { otherStatus, otherRecordingKind };
 }

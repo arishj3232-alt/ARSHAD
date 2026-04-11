@@ -15,8 +15,9 @@ import {
   Video,
 } from "lucide-react";
 import { cn, formatTime, formatCallDuration } from "@/lib/utils";
-import type { Message, ReceiptStatus } from "@/hooks/useMessages";
+import type { Message, MessageType, ReceiptStatus } from "@/hooks/useMessages";
 import TextWithLinks from "@/components/LinkPreview";
+import { SafeImage, SafeVideo } from "@/components/SafeMedia";
 
 type Props = {
   message: Message;
@@ -51,9 +52,62 @@ type Props = {
   onPeerProfileClick?: () => void;
   /** Firestore presence: other user online (pulse on avatar). */
   peerOnline?: boolean;
+  /** Consecutive same-sender grouping (hide duplicate avatars). */
+  hidePeerAvatar?: boolean;
+  compactInGroup?: boolean;
 };
 
 const WAVEFORM = [4, 7, 12, 18, 22, 28, 24, 16, 10, 20, 30, 26, 14, 8, 22, 18, 12, 6, 16, 24];
+
+function viewOnceRevealMediaType(message: Message): "image" | "video" {
+  const o = message.originalMediaType;
+  if (o === "image" || o === "video") return o;
+  return message.type === "video" ? "video" : "image";
+}
+
+function coalesceMediaUrl(msg: Message): string | undefined {
+  const u = msg.originalMediaUrl || msg.mediaUrl;
+  return typeof u === "string" && u.trim() ? u.trim() : undefined;
+}
+
+function coalesceMediaType(msg: Message): MessageType {
+  const o = msg.originalMediaType;
+  if (o === "image" || o === "video" || o === "audio") return o;
+  return msg.type;
+}
+
+/** Admin reveal: originals || live fields so legacy / partial docs never blank the UI. */
+function getVisibleContent(
+  msg: Message,
+  canReveal: boolean
+): { text?: string; mediaUrl?: string; mediaType: MessageType } {
+  if (msg.deleted || msg.deletedForEveryone) {
+    if (canReveal) {
+      const t = (msg.originalText || msg.text || "").trim() || undefined;
+      return {
+        text: t,
+        mediaUrl: coalesceMediaUrl(msg),
+        mediaType: coalesceMediaType(msg),
+      };
+    }
+    return { mediaType: "text" };
+  }
+
+  if (canReveal) {
+    const t = (msg.text || msg.originalText || "").trim() || undefined;
+    return {
+      text: t,
+      mediaUrl: coalesceMediaUrl(msg),
+      mediaType: coalesceMediaType(msg),
+    };
+  }
+
+  return {
+    text: msg.text?.trim() ? msg.text : undefined,
+    mediaUrl: typeof msg.mediaUrl === "string" && msg.mediaUrl.trim() ? msg.mediaUrl.trim() : undefined,
+    mediaType: msg.type,
+  };
+}
 
 function MessageReceiptTicks({
   status,
@@ -79,6 +133,7 @@ function AudioPlayer({ url }: { url: string }) {
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [mediaError, setMediaError] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const toggle = () => {
@@ -94,11 +149,16 @@ function AudioPlayer({ url }: { url: string }) {
     audioRef.current.currentTime = ratio * duration;
   };
 
+  if (mediaError) {
+    return <div className="text-xs text-white/45 px-2 py-3 rounded-lg bg-white/5 border border-white/10">Audio unavailable</div>;
+  }
+
   return (
     <div className="flex items-center gap-3 min-w-[200px]">
       <audio
         ref={audioRef}
         src={url}
+        onError={() => setMediaError(true)}
         onTimeUpdate={(e) => {
           const el = e.currentTarget;
           setProgress(el.duration ? (el.currentTime / el.duration) * 100 : 0);
@@ -149,8 +209,10 @@ function CanvasImage({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
+    setLoadError(false);
     let cancelled = false;
     let localBlobUrl: string | null = null;
 
@@ -162,7 +224,10 @@ function CanvasImage({
         localBlobUrl = URL.createObjectURL(blob);
         setBlobUrl(localBlobUrl);
       } catch {
-        setBlobUrl(null);
+        if (!cancelled) {
+          setBlobUrl(null);
+          setLoadError(true);
+        }
       }
     };
 
@@ -178,6 +243,7 @@ function CanvasImage({
     const canvas = canvasRef.current;
     if (!canvas || !blobUrl) return;
     const img = new Image();
+    img.onerror = () => setLoadError(true);
     img.onload = () => {
       const maxW = 260;
       const maxH = 300;
@@ -193,6 +259,14 @@ function CanvasImage({
     };
     img.src = blobUrl;
   }, [blobUrl]);
+
+  if (loadError) {
+    return (
+      <div className={cn("text-xs text-white/45 px-2 py-3 rounded-lg bg-white/5 border border-white/10", className)}>
+        Media unavailable
+      </div>
+    );
+  }
 
   return (
     <canvas
@@ -261,27 +335,31 @@ function FullscreenViewer({
         <X className="w-5 h-5" />
       </button>
       {type === "image" ? (
-        <img
-          src={blobUrl ?? url}
-          alt="Full view"
-          className="max-w-full max-h-full object-contain rounded-xl"
-          style={{ animation: "scaleIn 0.2s ease-out" }}
-          onClick={(e) => e.stopPropagation()}
-          draggable={imageDownloadProtection ? false : true}
-          onContextMenu={(e) => {
-            if (imageDownloadProtection) e.preventDefault();
-          }}
-        />
+        <div onClick={(e) => e.stopPropagation()} className="max-w-full max-h-full flex items-center justify-center">
+          <SafeImage
+            src={blobUrl ?? url}
+            alt="Full view"
+            className="max-w-full max-h-full object-contain rounded-xl"
+            style={{ animation: "scaleIn 0.2s ease-out" }}
+            draggable={imageDownloadProtection ? false : true}
+            onContextMenu={(e) => {
+              if (imageDownloadProtection) e.preventDefault();
+            }}
+          />
+        </div>
       ) : (
-        <video
-          src={url}
-          autoPlay
-          controls
-          playsInline
-          className="max-w-full max-h-full rounded-xl"
+        <div
           onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
-        />
+          className="max-w-full max-h-full flex items-center justify-center"
+        >
+          <SafeVideo
+            src={url}
+            autoPlay
+            playsInline
+            className="max-w-full max-h-full rounded-xl"
+          />
+        </div>
       )}
     </div>
   );
@@ -357,13 +435,26 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, revealDeletedCon
     onViewOnce(message.id);
   }, [message.id, onViewOnce]);
 
-  // Reveal mode: show original media even if already viewed
-  if (revealDeletedContent && revealUrl && message.viewOnceViewed && !isOwn) {
+  const revealVoType = viewOnceRevealMediaType(message);
+  // Admin reveal: expired, or receiver view-once consumed (incl. legacy flag)
+  const showViewOnceReveal =
+    revealDeletedContent &&
+    !!revealUrl &&
+    (isExpired || (!isOwn && !!message.viewOnceViewed));
+
+  if (showViewOnceReveal) {
     return (
       <>
-        {fullscreen && <FullscreenViewer url={revealUrl} type={message.type as "image" | "video"} onClose={() => setFullscreen(false)} imageDownloadProtection={imageDownloadProtection} />}
+        {fullscreen && (
+          <FullscreenViewer
+            url={revealUrl}
+            type={revealVoType}
+            onClose={() => setFullscreen(false)}
+            imageDownloadProtection={imageDownloadProtection}
+          />
+        )}
         <button onClick={() => setFullscreen(true)} className="relative block rounded-xl overflow-hidden border border-amber-400/30" style={{ maxWidth: 260, maxHeight: 300 }}>
-          {message.type === "image" && (
+          {revealVoType === "image" && (
             imageDownloadProtection ? (
               <CanvasImage
                 src={revealUrl}
@@ -371,15 +462,15 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, revealDeletedCon
                 className="max-w-[260px] max-h-[300px] rounded-xl opacity-80"
               />
             ) : (
-              <img
+              <SafeImage
                 src={revealUrl}
                 alt="Revealed"
                 className="max-w-[260px] max-h-[300px] rounded-xl opacity-80"
               />
             )
           )}
-          {message.type === "video" && (
-            <video src={revealUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+          {revealVoType === "video" && (
+            <SafeVideo src={revealUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
           )}
           <div className="absolute inset-0 bg-amber-500/10 flex items-end justify-start p-2 rounded-xl">
             <span className="text-[9px] text-amber-300/70 bg-black/40 rounded-lg px-1.5 py-0.5">🔍 Revealed</span>
@@ -440,7 +531,7 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, revealDeletedCon
               className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40"
             />
           ) : (
-            <img
+            <SafeImage
               src={message.mediaUrl}
               alt="view once"
               className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40"
@@ -458,7 +549,7 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, revealDeletedCon
                     className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
                   />
                 ) : (
-                  <img
+                  <SafeImage
                     src={message.mediaUrl}
                     alt="view once sender"
                     className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
@@ -470,7 +561,7 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, revealDeletedCon
               </div>
             ) : message.type === "video" && message.mediaUrl ? (
               <div className="relative">
-                <video src={message.mediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+                <SafeVideo src={message.mediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
                 <div className="absolute bottom-2 left-2 text-[10px] bg-black/50 rounded-full px-2 py-0.5 text-white/80">
                   {opened ? "Opened" : "Awaiting view"}
                 </div>
@@ -492,14 +583,14 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, revealDeletedCon
                     className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
                   />
                 ) : (
-                  <img
+                  <SafeImage
                     src={message.mediaUrl}
                     alt="view once opened"
                     className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
                   />
                 )
               ) : message.type === "video" && message.mediaUrl ? (
-                <video src={message.mediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+                <SafeVideo src={message.mediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
               ) : null
             ) : (
               <>
@@ -553,6 +644,8 @@ function ChatMessage({
   onDpPreview,
   onPeerProfileClick,
   peerOnline = false,
+  hidePeerAvatar = false,
+  compactInGroup = false,
 }: Props) {
   void _isOwn;
   const isOwn = message.senderId === currentUserId;
@@ -678,38 +771,38 @@ function ChatMessage({
 
   // ── Deleted for everyone ──────────────────────────────────────────────────
   if (message.deleted || message.deletedForEveryone) {
-    if (revealDeletedContent && message.originalText) {
-      return (
-        <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
-          <div className="px-4 py-2.5 rounded-2xl max-w-xs border border-amber-400/30 bg-amber-500/5 text-amber-200/80 text-sm relative">
-            <p>{message.originalText}</p>
-            <span className="text-[9px] text-amber-400/50 block mt-1">🔍 Revealed · deleted message</span>
+    if (revealDeletedContent) {
+      const vis = getVisibleContent(message, true);
+      const origText = (vis.text ?? "").trim();
+      const revealMediaUrl = (vis.mediaUrl ?? "").trim();
+      const mediaKind =
+        revealMediaUrl && (vis.mediaType === "image" || vis.mediaType === "video" || vis.mediaType === "audio")
+          ? vis.mediaType
+          : null;
+      if (origText || (revealMediaUrl && mediaKind)) {
+        return (
+          <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
+            <div className="rounded-2xl max-w-xs border border-amber-400/30 bg-amber-500/5 p-2.5 relative flex flex-col gap-2">
+              {!!origText && <p className="text-sm text-amber-200/90 px-0.5">{vis.text}</p>}
+              {revealMediaUrl && mediaKind === "image" &&
+                (imageDownloadProtection ? (
+                  <CanvasImage
+                    src={revealMediaUrl}
+                    alt="Revealed"
+                    className="max-w-[260px] max-h-[300px] rounded-xl opacity-90"
+                  />
+                ) : (
+                  <SafeImage src={revealMediaUrl} alt="Revealed" className="max-w-[260px] max-h-[300px] rounded-xl opacity-90" />
+                ))}
+              {revealMediaUrl && mediaKind === "video" && (
+                <SafeVideo src={revealMediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+              )}
+              {revealMediaUrl && mediaKind === "audio" && <AudioPlayer url={revealMediaUrl} />}
+              <span className="text-[9px] text-amber-400/50">🔍 Revealed · deleted message</span>
+            </div>
           </div>
-        </div>
-      );
-    }
-
-    const revealMediaUrl =
-      revealDeletedContent && message.originalMediaUrl
-        ? message.originalMediaUrl
-        : null;
-    if (revealMediaUrl && (message.type === "image" || message.type === "video")) {
-      return (
-        <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
-          <div className="rounded-2xl max-w-xs border border-amber-400/30 bg-amber-500/5 p-2 relative">
-            {message.type === "image" ? (
-              imageDownloadProtection ? (
-                <CanvasImage src={revealMediaUrl} alt="Revealed" className="max-w-[260px] max-h-[300px] rounded-xl opacity-90" />
-              ) : (
-                <img src={revealMediaUrl} alt="Revealed" className="max-w-[260px] max-h-[300px] rounded-xl opacity-90" />
-              )
-            ) : (
-              <video src={revealMediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline controls />
-            )}
-            <span className="text-[9px] text-amber-400/50 block mt-1">🔍 Revealed · deleted media</span>
-          </div>
-        </div>
-      );
+        );
+      }
     }
 
     const displayText = message.text?.trim() ? message.text : deletedForEveryoneText;
@@ -731,6 +824,7 @@ function ChatMessage({
   if (isDeletedForMe) return null;
 
   const isGhost = message.ghost && isOwn;
+  const vis = getVisibleContent(message, revealDeletedContent);
 
   return (
     <div
@@ -748,7 +842,12 @@ function ChatMessage({
     >
       {/* Other user avatar */}
       {!isOwn && (
-        <div className="flex-shrink-0 mr-1.5 mb-1 self-end relative">
+        <div
+          className={cn(
+            "flex-shrink-0 mr-1.5 mb-1 self-end relative",
+            hidePeerAvatar && "invisible pointer-events-none"
+          )}
+        >
           {dpUrl ? (
             <button
               type="button"
@@ -765,7 +864,11 @@ function ChatMessage({
                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 m-auto bg-emerald-500 ring-2 ring-[#0c0c16]" />
                 </span>
               )}
-              <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10 pointer-events-none" />
+              <SafeImage
+                src={dpUrl}
+                alt="avatar"
+                className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10 pointer-events-none"
+              />
             </button>
           ) : (
             <div className="relative w-6 h-6 rounded-full bg-gray-700 ring-1 ring-white/10">
@@ -922,7 +1025,7 @@ function ChatMessage({
               </button>
             )}
 
-            <div className="px-4 py-2.5">
+            <div className={cn("px-4", compactInGroup ? "py-1.5" : "py-2.5")}>
               {isCallMessage && (
                 <button
                   type="button"
@@ -960,7 +1063,12 @@ function ChatMessage({
                           ? (isOwn ? "Outgoing call" : "Incoming call")
                           : (isOwn ? "Called (not picked)" : "Missed call")}
                       </span>
-                      <span className="text-xs opacity-70">
+                      <span
+                        className={cn(
+                          "text-xs opacity-70",
+                          message.callStatus === "calling" && "text-white/55 animate-pulse"
+                        )}
+                      >
                         {!!message.duration && message.callStatus === "completed"
                           ? formatCallDuration(message.duration)
                           : formatTime(message.createdAt)}
@@ -970,8 +1078,8 @@ function ChatMessage({
                 </button>
               )}
 
-              {message.type === "text" && message.text && (
-                <TextWithLinks text={message.text} isOwn={isOwn} />
+              {vis.mediaType === "text" && vis.text && (
+                <TextWithLinks text={vis.text} isOwn={isOwn} />
               )}
 
               {(message.type === "image" || message.type === "video") && message.viewOnce && viewOnceEnabled ? (
@@ -986,38 +1094,48 @@ function ChatMessage({
                 />
               ) : (
                 <>
-                  {message.type === "image" && message.mediaUrl && (
+                  {vis.mediaType === "image" && vis.mediaUrl && (
                     <button type="button" className="block" onClick={() => {}}>
                       {imageDownloadProtection ? (
                         <CanvasImage
-                          src={message.mediaUrl}
+                          src={vis.mediaUrl}
                           alt="Image"
                           className="max-w-[260px] max-h-[300px] rounded-xl object-cover cursor-pointer hover:opacity-90 transition-opacity"
                         />
                       ) : (
-                        <img
-                          src={message.mediaUrl}
+                        <SafeImage
+                          src={vis.mediaUrl}
                           alt="Image"
                           className="max-w-[260px] max-h-[300px] rounded-xl object-cover cursor-pointer hover:opacity-90 transition-opacity"
                         />
                       )}
                     </button>
                   )}
-                  {message.type === "video" && message.mediaUrl && (
-                    <video src={message.mediaUrl} controls className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+                  {vis.mediaType === "video" && vis.mediaUrl && (
+                    <SafeVideo src={vis.mediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
                   )}
                 </>
               )}
 
-              {message.type === "audio" && message.mediaUrl && (
-                <AudioPlayer url={message.mediaUrl} />
-              )}
+              {vis.mediaType === "audio" && vis.mediaUrl && <AudioPlayer url={vis.mediaUrl} />}
 
               <div className={cn("flex items-center gap-1.5 mt-1", isOwn ? "justify-end text-right" : "justify-start text-left")}>
                 {message.edited && <span className="text-[9px] opacity-35 italic">edited</span>}
                 {isGhost && <span className="text-[9px] text-violet-400/50 italic">ghost</span>}
-                {!isCallMessage && <span className="text-[10px] opacity-40">{formatTime(message.createdAt)}</span>}
-                {isOwn && !isGhost && (
+                {!isCallMessage && (
+                  <span
+                    className={cn(
+                      "text-[10px] opacity-40",
+                      message.localStatus === "sending" && "animate-pulse"
+                    )}
+                  >
+                    {formatTime(message.createdAt)}
+                  </span>
+                )}
+                {isOwn && message.localStatus === "sending" && (
+                  <span className="text-[10px] text-white/50 animate-pulse">Sending…</span>
+                )}
+                {isOwn && !isGhost && message.localStatus !== "sending" && (
                   <span className="opacity-50">
                     <MessageReceiptTicks status={message.receiptStatus} readReceiptsEnabled={readReceiptsEnabled} />
                   </span>

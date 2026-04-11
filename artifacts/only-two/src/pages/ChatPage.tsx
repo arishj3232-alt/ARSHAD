@@ -51,15 +51,61 @@ import { useVibrationPreference } from "@/hooks/useVibrationPreference";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserStatus, useOtherUserStatus } from "@/hooks/useUserStatus";
 import ChatMessage from "@/components/ChatMessage";
-import VoiceRecorder from "@/components/VoiceRecorder";
 import VideoNoteRecorder from "@/components/VideoNoteRecorder";
+import HoldSwipeRecordOverlay from "@/components/HoldSwipeRecordOverlay";
+import { useHoldSwipeRecording } from "@/hooks/useHoldSwipeRecording";
 import CallOverlay from "@/components/CallOverlay";
 import SearchPanel from "@/components/SearchPanel";
 import GalleryPanel from "@/components/GalleryPanel";
 import CursorPresence from "@/components/CursorPresence";
 import AdminPanel from "@/components/AdminPanel";
 import type { Message } from "@/hooks/useMessages";
+import { formatRecordingClock } from "@/lib/formatDuration";
+import { vibrateShort } from "@/lib/haptics";
+
 const TYPING_DEBOUNCE_MS = 1500;
+
+function isSameGroup(prev: Message | undefined, curr: Message): boolean {
+  if (!prev) return false;
+  if (prev.senderId !== curr.senderId) return false;
+  const a = prev.createdAt?.getTime() ?? 0;
+  const b = curr.createdAt?.getTime() ?? 0;
+  return Math.abs(b - a) < 120_000;
+}
+
+function buildOptimisticTextMessage(args: {
+  tempId: string;
+  userId: string;
+  text: string;
+  replyTo: Message | null;
+  ghost: boolean;
+}): Message {
+  const now = new Date();
+  return {
+    id: args.tempId,
+    senderId: args.userId,
+    type: "text",
+    text: args.text,
+    replyToId: args.replyTo?.id,
+    replyToText: args.replyTo?.text?.slice(0, 80),
+    deleted: false,
+    deletedForEveryone: false,
+    deletedFor: {},
+    seen: false,
+    delivered: false,
+    viewOnce: false,
+    viewOnceViewed: false,
+    openedBy: [],
+    openedAt: null,
+    expiresAt: null,
+    ghost: args.ghost,
+    reactions: {},
+    edited: false,
+    createdAt: now,
+    receiptStatus: "sent",
+    localStatus: "sending",
+  };
+}
 
 const isMobileDevice =
   typeof window !== "undefined" &&
@@ -75,7 +121,7 @@ type Props = {
   onLeaveRoom?: () => Promise<void> | void;
 };
 
-type InputMode = "text" | "voice" | "videonote";
+type InputMode = "text" | "videonote";
 
 const STATUS_DOT: Record<string, { color: string; label: string }> = {
   online: { color: "bg-emerald-400", label: "Online" },
@@ -109,6 +155,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const [missedCallBanner, setMissedCallBanner] = useState(false);
   const [dpPreviewUrl, setDpPreviewUrl] = useState<string | null>(null);
   const [myRole, setMyRole] = useState<"shelly" | "arshad" | null>(null);
+  const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
+  const optimisticPendingRef = useRef<{ tempId: string; docId: string } | null>(null);
 
   // --- Command-driven states ---
   const [ghostMode, setGhostMode] = useState(false);
@@ -162,28 +210,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const otherDpUrl = resolvedOtherId ? getDpUrl(resolvedOtherId) : null;
 
   const { setStatus: setMyStatus } = useUserStatus(roomCode, userId);
-  const otherStatus = useOtherUserStatus(roomCode, resolvedOtherId);
-
-  // Activity status (suppressed in ghost mode)
-  useEffect(() => {
-    if (ghostMode) return;
-    if (document.hidden) setMyStatus("browsing");
-    else if (inputMode === "voice") setMyStatus("recording");
-    else if (panel === "gallery") setMyStatus("viewingMedia");
-    else if (panel === "search") setMyStatus("browsing");
-    else setMyStatus("online");
-  }, [inputMode, panel, setMyStatus, ghostMode]);
-
-  // Keep status aligned with tab visibility changes.
-  useEffect(() => {
-    if (!userId || ghostMode) return undefined;
-    const onVisibility = () => {
-      if (document.hidden) setMyStatus("browsing");
-      else setMyStatus("online");
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [userId, setMyStatus, ghostMode]);
+  const { otherStatus, otherRecordingKind } = useOtherUserStatus(roomCode, resolvedOtherId);
 
   // Force-logout listener
   useEffect(() => {
@@ -340,6 +367,22 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     [messages]
   );
 
+  const displayMessages = useMemo(() => {
+    const base = messages.filter((m) => !(m.ghost && m.senderId !== userId));
+    const merged = [...base, ...optimisticMessages];
+    merged.sort((a, b) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0));
+    return merged;
+  }, [messages, optimisticMessages, userId]);
+
+  useEffect(() => {
+    const pending = optimisticPendingRef.current;
+    if (!pending) return;
+    if (messages.some((m) => m.id === pending.docId)) {
+      setOptimisticMessages((prev) => prev.filter((m) => m.id !== pending.tempId));
+      optimisticPendingRef.current = null;
+    }
+  }, [messages]);
+
   const {
     callStatus, callType, isMuted, isCameraOff, callDuration,
     isMinimized, setIsMinimized, localVideoRef, remoteVideoRef, remoteAudioRef,
@@ -437,15 +480,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     }
   }, [roomCode, incomingCallId, callStatus, answerCall, rejectCall, setIsMinimized]);
 
-  // Call-specific status overrides
-  useEffect(() => {
-    if (ghostMode) return;
-    if (document.hidden) return;
-    if (callStatus === "connected" && callType === "video") setMyStatus("viewingMedia");
-    else if (callStatus === "connected" && callType === "audio") setMyStatus("recording");
-    else if (callStatus === "connecting" || callStatus === "calling") setMyStatus("browsing");
-  }, [callStatus, callType, setMyStatus, ghostMode]);
-
   const keywordLists = useMemo(() => resolveKeywordLists(settings), [settings]);
   const lastKeywordDedupeRef = useRef("");
 
@@ -458,13 +492,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       const result = handleKeyword(messageText, {
         settings,
         isAdmin: adminStealthRead,
-        revealOffList: keywordLists.revealOff,
-        revealOnList: keywordLists.revealOn,
-        ghostOffList: keywordLists.ghostOff,
-        ghostOnList: keywordLists.ghostOn,
-        readReceiptOffList: keywordLists.readReceiptOff,
-        readReceiptOnList: keywordLists.readReceiptOn,
-        adminList: keywordLists.admin,
+        lists: keywordLists,
         setRevealMode: setShowDeleted,
         setGhostMode,
         setReadReceipt: (val) => {
@@ -668,7 +696,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     if (!t) return;
 
     // Keywords (reveal, admin, ghost, etc.) must work even when Messaging is disabled in admin.
-    if (runKeywordCommand(t)) {
+    const handled = runKeywordCommand(t);
+    if (handled) {
       setText("");
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       setTyping(false);
@@ -682,26 +711,65 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       return;
     }
 
+    const tempId = `temp_${Date.now()}`;
+    const replySnapshot = replyTo;
+    const optimistic = buildOptimisticTextMessage({
+      tempId,
+      userId,
+      text: t,
+      replyTo: replySnapshot,
+      ghost: ghostMode,
+    });
+    setOptimisticMessages((prev) => [...prev, optimistic]);
+    lastMessageIdRef.current = tempId;
+    scrollToBottom(true);
+
     setText("");
     setReplyTo(null);
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     setTyping(false);
 
-    await sendMessage({
-      type: "text",
-      text: t,
-      replyToId: replyTo?.id,
-      replyToText: replyTo?.text?.slice(0, 80),
-      ghost: ghostMode,
-    });
-  }, [text, replyTo, sendMessage, setTyping, settings.messagingEnabled, runKeywordCommand, ghostMode, checkMsgRateLimit]);
+    try {
+      const docId = await sendMessage({
+        type: "text",
+        text: t,
+        replyToId: replySnapshot?.id,
+        replyToText: replySnapshot?.text?.slice(0, 80),
+        ghost: ghostMode,
+      });
+      if (docId) optimisticPendingRef.current = { tempId, docId };
+      else setOptimisticMessages((prev) => prev.filter((m) => m.id !== tempId));
+      vibrateShort(35);
+    } catch {
+      setOptimisticMessages((prev) => prev.filter((m) => m.id !== tempId));
+      optimisticPendingRef.current = null;
+    }
+  }, [
+    text,
+    replyTo,
+    sendMessage,
+    setTyping,
+    settings.messagingEnabled,
+    runKeywordCommand,
+    ghostMode,
+    checkMsgRateLimit,
+    userId,
+    scrollToBottom,
+  ]);
 
   const handleEditSubmit = useCallback(async () => {
-    if (!editingMsg || !editText.trim()) return;
-    await editMessage(editingMsg.id, editText.trim());
+    if (!editingMsg) return;
+    const t = editText.trim();
+    if (!t) return;
+    if (runKeywordCommand(t)) {
+      setEditingMsg(null);
+      setEditText("");
+      return;
+    }
+    await editMessage(editingMsg.id, t);
     setEditingMsg(null);
     setEditText("");
-  }, [editingMsg, editText, editMessage]);
+  }, [editingMsg, editText, editMessage, runKeywordCommand]);
 
   const startEdit = useCallback((msg: Message) => {
     setEditingMsg(msg);
@@ -753,13 +821,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     setViewOnceNext(false);
   };
 
-  const handleVoiceSend = async (blob: Blob) => {
-    const file = new File([blob], `voice_${Date.now()}.webm`, { type: "audio/webm" });
-    const { url } = await uploadMedia(file);
-    await sendMessage({ type: "audio", mediaUrl: url, ghost: ghostMode });
-    setInputMode("text");
-  };
-
   const handleVideoNoteSend = async (blob: Blob) => {
     if (!settings.videoNoteEnabled) return;
     const file = new File([blob], `vidnote_${Date.now()}.webm`, { type: "video/webm" });
@@ -767,6 +828,75 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     await sendMessage({ type: "video", mediaUrl: url, ghost: ghostMode });
     setInputMode("text");
   };
+
+  const holdSwipe = useHoldSwipeRecording({
+    onSend: useCallback(
+      async (blob, mode) => {
+        if (mode === "audio") {
+          const file = new File([blob], `voice_${Date.now()}.webm`, { type: "audio/webm" });
+          const { url } = await uploadMedia(file);
+          await sendMessage({ type: "audio", mediaUrl: url, ghost: ghostMode });
+        } else {
+          if (!settings.videoNoteEnabled) return;
+          const file = new File([blob], `vidnote_${Date.now()}.webm`, { type: "video/webm" });
+          const { url } = await uploadMedia(file);
+          await sendMessage({ type: "video", mediaUrl: url, ghost: ghostMode });
+        }
+        setInputMode("text");
+      },
+      [uploadMedia, sendMessage, ghostMode, settings.videoNoteEnabled]
+    ),
+  });
+
+  // Single RTDB activity writer: tab visibility → call state → hold-to-record → panels → online
+  useEffect(() => {
+    if (!userId || ghostMode) return undefined;
+    const applyMyStatus = () => {
+      if (document.hidden) {
+        setMyStatus("browsing");
+        return;
+      }
+      if (callStatus === "connected" && callType === "video") {
+        setMyStatus("viewingMedia");
+        return;
+      }
+      if (callStatus === "connected" && callType === "audio") {
+        setMyStatus("recording", { recordingKind: "audio" });
+        return;
+      }
+      if (callStatus === "connecting" || callStatus === "calling") {
+        setMyStatus("browsing");
+        return;
+      }
+      if (holdSwipe.open) {
+        setMyStatus("recording", {
+          recordingKind: holdSwipe.mode === "video" ? "video" : "audio",
+        });
+        return;
+      }
+      if (panel === "gallery") {
+        setMyStatus("viewingMedia");
+        return;
+      }
+      if (panel === "search") {
+        setMyStatus("browsing");
+        return;
+      }
+      setMyStatus("online");
+    };
+    applyMyStatus();
+    document.addEventListener("visibilitychange", applyMyStatus);
+    return () => document.removeEventListener("visibilitychange", applyMyStatus);
+  }, [
+    userId,
+    ghostMode,
+    holdSwipe.open,
+    holdSwipe.mode,
+    panel,
+    callStatus,
+    callType,
+    setMyStatus,
+  ]);
 
   const safeStartCall = useCallback((type: "audio" | "video") => {
     if (type === "video" && !settings.videoCallEnabled) return;
@@ -803,14 +933,14 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const groupedMessages = useMemo(() => {
     const groups: { date: string; msgs: Message[] }[] = [];
     let currentDate = "";
-    messages.forEach((msg) => {
+    displayMessages.forEach((msg) => {
       if (msg.ghost && msg.senderId !== userId) return;
       const d = msg.createdAt ? formatDate(msg.createdAt) : "Today";
       if (d !== currentDate) { groups.push({ date: d, msgs: [] }); currentDate = d; }
       groups[groups.length - 1].msgs.push(msg);
     });
     return groups;
-  }, [messages, userId]);
+  }, [displayMessages, userId]);
 
   const showCursors = settings.cursorPresenceEnabled && !isMobileDevice;
   const statusDot = STATUS_DOT[otherStatus] ?? STATUS_DOT.offline;
@@ -852,7 +982,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
               title="View profile"
             >
               {otherDpUrl ? (
-                <img src={otherDpUrl} alt={otherName} className="w-full h-full object-cover" />
+                <img src={otherDpUrl} alt={otherName} className="w-full h-full object-cover" loading="lazy" decoding="async" />
               ) : (
                 <span className="text-white font-bold text-sm select-none">{otherName[0]?.toUpperCase() ?? "?"}</span>
               )}
@@ -870,11 +1000,13 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             <p className="text-white font-semibold text-sm leading-tight">{otherName}</p>
             <p className="text-white/35 text-xs truncate">
               {peerTypingLine ? (
-                <span className="text-pink-400/70">typing…</span>
+                <span className="text-pink-400/70 animate-pulse">typing…</span>
               ) : otherStatus === "recording" ? (
-                <span className="text-blue-400/70">🎙 recording…</span>
+                <span className="text-blue-400/70 animate-pulse">
+                  {otherRecordingKind === "video" ? "Recording video…" : "Recording audio…"}
+                </span>
               ) : otherStatus === "viewingMedia" ? (
-                <span className="text-yellow-400/70">viewing media…</span>
+                <span className="text-yellow-400/70 animate-pulse">viewing media…</span>
               ) : roleCount < 2 ? (
                 `Waiting for ${waitingForName}...`
               ) : headerPeerOnline ? (
@@ -963,11 +1095,20 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                   <div className="flex-1 h-px bg-white/5" />
                 </div>
                 <div className="space-y-0.5">
-                  {msgs.map((msg) => (
-                    <div key={msg.id} ref={(el) => { if (el) messageRefs.current[msg.id] = el; }} className="py-0.5">
+                  {msgs.map((msg, mi) => {
+                    const prevInDay = mi > 0 ? msgs[mi - 1] : undefined;
+                    const inGroup = isSameGroup(prevInDay, msg);
+                    return (
+                    <div
+                      key={msg.id}
+                      ref={(el) => { if (el) messageRefs.current[msg.id] = el; }}
+                      className={inGroup ? "py-0" : "py-0.5"}
+                    >
                       <ChatMessage
                         message={msg}
                         isOwn={msg.senderId === userId}
+                        hidePeerAvatar={inGroup && msg.senderId !== userId}
+                        compactInGroup={inGroup}
                         currentUserId={userId}
                         onDelete={handleDeleteForEveryone}
                         onDeleteForMe={deleteForMe}
@@ -999,7 +1140,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                         onDpPreview={(url) => setDpPreviewUrl(url)}
                       />
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))
@@ -1068,9 +1210,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             </div>
           )}
 
-          {inputMode === "voice" ? (
-            <VoiceRecorder onSend={handleVoiceSend} onCancel={() => setInputMode("text")} />
-          ) : inputMode === "videonote" ? (
+          {inputMode === "videonote" ? (
             <VideoNoteRecorder onSend={handleVideoNoteSend} onCancel={() => setInputMode("text")} disabled={!settings.videoNoteEnabled} />
           ) : (
             <div className="flex items-end gap-2">
@@ -1218,9 +1358,73 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
               />
 
               <div className="flex items-center gap-1 flex-shrink-0">
+                {!editingMsg && (showDeleted || ghostMode || readReceiptsOn) && (
+                  <div className="flex items-center gap-2 mr-2 flex-wrap justify-end max-w-[min(11rem,42vw)]" aria-live="polite">
+                    {showDeleted && (
+                      <span
+                        title="Reveal mode"
+                        className="text-[10px] font-medium bg-violet-600/95 text-white px-2 py-0.5 rounded-md flex items-center gap-0.5 shrink-0"
+                      >
+                        <Eye className="w-3 h-3 opacity-90" />
+                        Reveal
+                      </span>
+                    )}
+                    {ghostMode && (
+                      <span
+                        title="Ghost mode"
+                        className="text-[10px] font-medium bg-white/15 text-white/95 px-2 py-0.5 rounded-md flex items-center gap-0.5 shrink-0"
+                      >
+                        <Ghost className="w-3 h-3" />
+                        Ghost
+                      </span>
+                    )}
+                    {readReceiptsOn && (
+                      <span
+                        title="Read receipts on"
+                        className="text-[10px] font-medium bg-sky-600/95 text-white px-2 py-0.5 rounded-md flex items-center gap-0.5 shrink-0"
+                      >
+                        <Check className="w-3 h-3" />
+                        Read
+                      </span>
+                    )}
+                  </div>
+                )}
+                {holdSwipe.open && !editingMsg && (
+                  <span
+                    className="text-[11px] font-mono tabular-nums text-white/55 animate-pulse mr-0.5 min-w-[2.25rem] text-right"
+                    aria-live="polite"
+                  >
+                    {formatRecordingClock(holdSwipe.seconds)}
+                  </span>
+                )}
                 {settings.voiceMessagesEnabled && !text.trim() && !editingMsg && (
-                  <button onClick={() => setInputMode("voice")} className="p-2 rounded-xl hover:bg-white/10 text-white/40 hover:text-white transition" data-testid="button-voice-message">
+                  <button
+                    type="button"
+                    className="p-2 rounded-xl hover:bg-white/10 text-white/40 hover:text-white transition touch-none select-none active:bg-white/15"
+                    onPointerDown={(e) => holdSwipe.handleHoldPointerDown(e, "audio")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    title="Hold to record"
+                    data-testid="button-voice-message"
+                  >
                     <Mic className="w-5 h-5" />
+                  </button>
+                )}
+                {settings.videoNoteEnabled && !text.trim() && !editingMsg && (
+                  <button
+                    type="button"
+                    className="p-2 rounded-xl hover:bg-white/10 text-white/40 hover:text-sky-300 transition touch-none select-none active:bg-white/15"
+                    onPointerDown={(e) => holdSwipe.handleHoldPointerDown(e, "video")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    title="Hold to record video note"
+                    data-testid="button-video-note-hold"
+                  >
+                    <VideoIcon className="w-5 h-5" />
                   </button>
                 )}
                 {editingMsg ? (
@@ -1258,6 +1462,19 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         </div>
       )}
 
+      <HoldSwipeRecordOverlay
+        open={holdSwipe.open}
+        mode={holdSwipe.mode}
+        locked={holdSwipe.locked}
+        seconds={holdSwipe.seconds}
+        maxSeconds={holdSwipe.maxSeconds}
+        bars={holdSwipe.bars}
+        error={holdSwipe.error}
+        videoRef={holdSwipe.videoRef}
+        onLockedSend={holdSwipe.lockedSend}
+        onLockedCancel={holdSwipe.lockedCancel}
+      />
+
       {/* Remote audio — always in the DOM so it is never unmounted mid-call.
            srcObject is assigned by useWebRTC's effect and the ontrack direct fallback. */}
       <audio
@@ -1285,6 +1502,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             src={dpPreviewUrl}
             alt=""
             className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            loading="lazy"
+            decoding="async"
             onClick={(e) => e.stopPropagation()}
           />
         </div>
@@ -1313,6 +1532,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                 src={profileModal.dpUrl}
                 alt=""
                 className="w-40 h-40 rounded-full object-cover mx-auto mb-4 ring-2 ring-white/10"
+                loading="lazy"
+                decoding="async"
               />
             ) : (
               <div className="w-40 h-40 rounded-full bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center mx-auto mb-4 text-white text-4xl font-bold">

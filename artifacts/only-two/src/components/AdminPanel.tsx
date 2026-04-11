@@ -182,11 +182,30 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
     if (emojis.length > 0) onUpdate("reactionEmojis", emojis);
   };
 
+  const offHints = (keywords: string[]) =>
+    keywords.length ? keywords.map((k) => offKeywordToken(k)).join(", ") : "—";
+
   const keywordFields: KeywordField[] = [
-    { key: "adminKeyword", label: "Admin Panel", hint: "Opens the admin panel" },
-    { key: "revealKeyword", label: "Reveal Mode (toggle)", hint: `Type to toggle · Type "${offKeywordToken(settings.revealKeyword)}" to force off` },
-    { key: "ghostKeyword", label: "Ghost Mode (toggle)", hint: `Type to toggle · Type "${offKeywordToken(settings.ghostKeyword)}" to force off` },
-    { key: "readReceiptKeyword", label: "Read Receipts (toggle)", hint: `Type to toggle · Type "${offKeywordToken(settings.readReceiptKeyword)}" to force off` },
+    {
+      key: "adminKeywords",
+      label: "Admin panel",
+      hint: "Comma-separated · case-insensitive · never sent as chat",
+    },
+    {
+      key: "revealKeywords",
+      label: "Reveal mode (admin on)",
+      hint: `Off tokens: ${offHints(settings.revealKeywords)}`,
+    },
+    {
+      key: "ghostKeywords",
+      label: "Ghost mode",
+      hint: `Off tokens: ${offHints(settings.ghostKeywords)}`,
+    },
+    {
+      key: "readReceiptKeywords",
+      label: "Read receipts toggle",
+      hint: `Off tokens: ${offHints(settings.readReceiptKeywords)}`,
+    },
   ];
 
   return (
@@ -296,22 +315,32 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
                 <p className="text-white/60 text-sm font-medium">Secret Keywords</p>
               </div>
               <p className="text-white/25 text-xs mb-4 leading-relaxed px-1">
-                Type exact keyword in the message box — triggers instantly, never sent as a message. Off-keywords are auto-generated as "off" + first 2 letters of the keyword.
+                Comma-separated keywords — case-insensitive, normalized at runtime. Off-keywords: &quot;off&quot; + first 2 letters of each primary (e.g. BEN10 → offbe).
               </p>
               <div className="space-y-3">
-                {keywordFields.map((field) => (
-                  <div key={field.key} className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
-                    <p className="text-white/60 text-xs font-medium mb-0.5">{field.label}</p>
-                    <p className="text-white/25 text-[10px] mb-2">{field.hint}</p>
-                    <input
-                      key={`${field.key}_${settings[field.key]}`}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-violet-500/50 transition tracking-wider"
-                      defaultValue={settings[field.key] as string}
-                      onBlur={(e) => { const v = e.target.value.trim(); if (v) onUpdate(field.key, v); }}
-                      placeholder="Enter keyword…"
-                    />
-                  </div>
-                ))}
+                {keywordFields.map((field) => {
+                  const arr = settings[field.key] as string[];
+                  const joined = Array.isArray(arr) ? arr.join(", ") : "";
+                  return (
+                    <div key={field.key} className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
+                      <p className="text-white/60 text-xs font-medium mb-0.5">{field.label}</p>
+                      <p className="text-white/25 text-[10px] mb-2">{field.hint}</p>
+                      <input
+                        key={`${field.key}_${joined}`}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm font-mono focus:outline-none focus:border-violet-500/50 transition tracking-wider"
+                        defaultValue={joined}
+                        onBlur={(e) => {
+                          const parts = e.target.value
+                            .split(/[,\n]+/)
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          if (parts.length > 0) onUpdate(field.key, parts);
+                        }}
+                        placeholder="keyword1, keyword2…"
+                      />
+                    </div>
+                  );
+                })}
               </div>
               <p className="text-white/15 text-[10px] px-1 mt-4 leading-relaxed">
                 Keywords are never shown in chat, never sent as messages. All changes sync instantly.
