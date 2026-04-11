@@ -2,8 +2,6 @@ import { useState, useRef, useEffect, useCallback, memo } from "react";
 import {
   Trash2,
   Reply,
-  CheckCheck,
-  Check,
   Play,
   Pause,
   Eye,
@@ -15,7 +13,7 @@ import {
   Video,
 } from "lucide-react";
 import { cn, formatTime, formatCallDuration } from "@/lib/utils";
-import type { Message, MessageType, ReceiptStatus } from "@/hooks/useMessages";
+import type { Message, MessageType } from "@/hooks/useMessages";
 import TextWithLinks from "@/components/LinkPreview";
 import { SafeImage, SafeVideo } from "@/components/SafeMedia";
 
@@ -42,7 +40,7 @@ type Props = {
   dpUrl?: string | null;
   /** Admin + reveal keyword: show original deleted text/media. */
   revealDeletedContent?: boolean;
-  readReceiptsEnabled?: boolean;
+  maskReadReceiptInUi?: boolean;
   viewOnceEnabled?: boolean;
   viewOnceTimerMs?: number;
   imageDownloadProtection?: boolean;
@@ -107,25 +105,6 @@ function getVisibleContent(
     mediaUrl: typeof msg.mediaUrl === "string" && msg.mediaUrl.trim() ? msg.mediaUrl.trim() : undefined,
     mediaType: msg.type,
   };
-}
-
-function MessageReceiptTicks({
-  status,
-  readReceiptsEnabled,
-}: {
-  status: ReceiptStatus;
-  readReceiptsEnabled: boolean;
-}) {
-  if (!readReceiptsEnabled) {
-    return status === "sent" ? (
-      <Check className="w-3 h-3" />
-    ) : (
-      <CheckCheck className="w-3 h-3 opacity-50" />
-    );
-  }
-  if (status === "sent") return <Check className="w-3 h-3" />;
-  if (status === "delivered") return <CheckCheck className="w-3 h-3" />;
-  return <CheckCheck className="w-3 h-3 text-sky-300" />;
 }
 
 // ─── Audio player ────────────────────────────────────────────────────────────
@@ -636,7 +615,7 @@ function ChatMessage({
   viewOnceLimitText = "This image has reached its limit",
   dpUrl,
   revealDeletedContent = false,
-  readReceiptsEnabled = true,
+  maskReadReceiptInUi = false,
   viewOnceEnabled = true,
   viewOnceTimerMs = 15_000,
   imageDownloadProtection = true,
@@ -649,10 +628,14 @@ function ChatMessage({
 }: Props) {
   void _isOwn;
   const isOwn = message.senderId === currentUserId;
-  const cappedReceiptStatus: ReceiptStatus =
-    isOwn && !readReceiptsEnabled && message.receiptStatus === "read"
-      ? "delivered"
-      : message.receiptStatus;
+  const rawReceiptLabel = message.seen ? "read" : message.delivered ? "delivered" : "sent";
+  const receiptLabelBase =
+    maskReadReceiptInUi && rawReceiptLabel === "read" ? "delivered" : rawReceiptLabel;
+  const showSendingReceipt =
+    message.localStatus === "sending" &&
+    !message.delivered &&
+    !message.seen;
+  const receiptLabel = showSendingReceipt ? "sending..." : receiptLabelBase;
   const [showActions, setShowActions] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
@@ -1127,21 +1110,20 @@ function ChatMessage({
                 {message.edited && <span className="text-[9px] opacity-35 italic">edited</span>}
                 {isGhost && <span className="text-[9px] text-violet-400/50 italic">ghost</span>}
                 {!isCallMessage && (
-                  <span
-                    className={cn(
-                      "text-[10px] opacity-40",
-                      message.localStatus === "sending" && "animate-pulse"
-                    )}
-                  >
+                  <span className="text-[10px] text-white/40">
                     {formatTime(message.createdAt)}
                   </span>
                 )}
-                {isOwn && message.localStatus === "sending" && (
-                  <span className="text-[10px] text-white/50 animate-pulse">Sending…</span>
-                )}
-                {isOwn && !isGhost && message.localStatus !== "sending" && (
-                  <span className="opacity-50">
-                    <MessageReceiptTicks status={cappedReceiptStatus} readReceiptsEnabled={readReceiptsEnabled} />
+                {isOwn && (
+                  <span
+                    className={cn(
+                      "text-[10px] ml-1",
+                      showSendingReceipt
+                        ? "text-white/30 animate-pulse"
+                        : "text-white/40"
+                    )}
+                  >
+                    {receiptLabel}
                   </span>
                 )}
               </div>

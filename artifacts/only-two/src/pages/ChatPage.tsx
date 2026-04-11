@@ -209,8 +209,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
 
   const roomReadReceiptsEnabled = settings.readReceiptsEnabled !== false;
   const myReadReceiptsHide = profile.readReceiptsEnabled === true;
-  const readReceiptTicksShowRead = roomReadReceiptsEnabled && !myReadReceiptsHide;
-
   const { setStatus: setMyStatus } = useUserStatus(roomCode, userId);
   const { otherStatus, otherRecordingKind, otherTs } = useOtherUserStatus(roomCode, resolvedOtherId);
 
@@ -1093,7 +1091,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                           setProfileModal({ name: otherName, dpUrl: otherDpUrl, bio: null })
                         }
                         peerOnline={headerPeerOnline}
-                        readReceiptsEnabled={readReceiptTicksShowRead}
+                        maskReadReceiptInUi={myReadReceiptsHide}
                         viewOnceEnabled={settings.viewOnceEnabled}
                         viewOnceTimerMs={viewOnceTimerMs}
                         imageDownloadProtection={settings.imageDownloadProtection}

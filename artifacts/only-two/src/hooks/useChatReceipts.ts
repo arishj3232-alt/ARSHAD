@@ -41,7 +41,7 @@ export function useChatReceipts(
       if (m.senderId === currentUserId) continue;
       if (m.deleted || m.deletedForEveryone || m.ghost) continue;
       if (currentUserId && m.deletedFor?.[currentUserId]) continue;
-      if (m.receiptStatus !== "sent") continue;
+      if (m.delivered) continue;
       if (deliveredPendingRef.current.has(m.id)) continue;
       deliveredPendingRef.current.add(m.id);
       void Promise.resolve(markDelivered(m.id)).finally(() => {
@@ -68,7 +68,9 @@ export function useChatReceipts(
         !m.deletedForEveryone &&
         !m.ghost &&
         !(currentUserId && m.deletedFor?.[currentUserId]) &&
-        m.receiptStatus !== "read"
+        !m.seen &&
+        roomReadReceiptsEnabled &&
+        !hideReadSignalsFromReader
     );
     unseen.forEach((m) => void markSeen(m.id));
   }, [

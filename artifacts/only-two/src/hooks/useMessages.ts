@@ -112,8 +112,6 @@ function buildOutgoingMessageDoc(
 }
 
 function deriveReceiptStatus(data: Record<string, unknown>): ReceiptStatus {
-  const r = data.receiptStatus;
-  if (r === "sent" || r === "delivered" || r === "read") return r;
   if (data.seen === true) return "read";
   if (data.delivered === true) return "delivered";
   return "sent";
