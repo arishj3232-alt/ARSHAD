@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { doc, onSnapshot } from "firebase/firestore";
 import { ref, set, onValue, onDisconnect, serverTimestamp } from "firebase/database";
-import { rtdb } from "@/lib/firebase";
+import { db, rtdb } from "@/lib/firebase";
 import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
 
 export type UserActivityStatus =
@@ -73,19 +74,6 @@ export function useUserStatus(roomCode: string, userId: string | null) {
   return { setStatus };
 }
 
-function peerSessionIdFromRoles(data: Record<string, unknown>, otherId: string): string | null {
-  for (const role of ["shelly", "arshad"] as const) {
-    const node = data[role];
-    if (typeof node === "object" && node !== null) {
-      const o = node as { userId?: string; sessionId?: string };
-      if (o.userId === otherId && typeof o.sessionId === "string" && o.sessionId.length > 0) {
-        return o.sessionId;
-      }
-    }
-  }
-  return null;
-}
-
 export function useOtherUserStatus(roomCode: string, otherId: string | null) {
   const [otherStatus, setOtherStatus] = useState<UserActivityStatus>("offline");
   const [otherRecordingKind, setOtherRecordingKind] = useState<RecordingKind | null>(null);
@@ -93,18 +81,18 @@ export function useOtherUserStatus(roomCode: string, otherId: string | null) {
 
   useEffect(() => {
     if (!otherId || !roomCode) return undefined;
-    const rolesRef = ref(rtdb, `rooms/${roomCode}/roles`);
+    const presenceDoc = doc(db, "rooms", roomCode, "presence", otherId);
     let unsubStatus: (() => void) | null = null;
     const clearStatus = () => {
       unsubStatus?.();
       unsubStatus = null;
     };
-    const unsubRoles = onValue(
-      rolesRef,
+    const unsubPresence = onSnapshot(
+      presenceDoc,
       (snap) => {
         clearStatus();
-        const data = (snap.val() ?? {}) as Record<string, unknown>;
-        const peerSid = peerSessionIdFromRoles(data, otherId);
+        const data = snap.data() as { tabSessionId?: string } | undefined;
+        const peerSid = typeof data?.tabSessionId === "string" ? data.tabSessionId.trim() : "";
         if (!peerSid) {
           setOtherTs(0);
           setOtherStatus("offline");
@@ -139,7 +127,7 @@ export function useOtherUserStatus(roomCode: string, otherId: string | null) {
     );
     return () => {
       clearStatus();
-      unsubRoles();
+      unsubPresence();
     };
   }, [roomCode, otherId]);
 

@@ -23,8 +23,9 @@ function parseSessionPayload(raw: string | null): Omit<PersistedSession, "lastAc
     if (typeof roomCode !== "string" || !roomCode.trim()) return null;
     const rc = roomCode.trim();
     if (role !== "shelly" && role !== "arshad") return null;
-    if (typeof userId !== "string" || !userId.length) return null;
-    if (userId !== `${rc}_${role}`) return null;
+    if (typeof userId !== "string" || userId.length < 8) return null;
+    /* Reject legacy composite ids (`${room}_${role}`) — require UUID-only sessions. */
+    if (userId.includes("_")) return null;
     const lastActive =
       typeof o.lastActive === "number" && o.lastActive > 0 ? o.lastActive : undefined;
     return { roomCode: rc, role, userId, lastActive };

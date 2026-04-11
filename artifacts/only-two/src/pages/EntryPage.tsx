@@ -1,23 +1,10 @@
 import { useEffect, useState } from "react";
 import { Heart, Lock, Sparkles } from "lucide-react";
+import { collection, onSnapshot } from "firebase/firestore";
 import { cn } from "@/lib/utils";
-import { get, onValue, ref, set } from "firebase/database";
-import { rtdb } from "@/lib/firebase";
-import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
-
-/** If last status heartbeat is older than this, treat role lock as stale (ghost session). */
-const STALE_ROLE_LOCK_MS = 60_000;
-
-function roleOccupiedByOtherTab(roleNode: any, tabId: string): boolean {
-  if (!roleNode) return false;
-  if (typeof roleNode !== "object") return true;
-
-  const sid = roleNode.sessionId;
-
-  if (!sid || typeof sid !== "string") return true;
-
-  return sid !== tabId;
-}
+import { db } from "@/lib/firebase";
+import { getOrCreatePersistentUserId } from "@/lib/identity";
+import { PRESENCE_ONLINE_MAX_AGE_MS } from "@/hooks/usePresence";
 
 type Props = {
   onJoin: (payload: { role: "shelly" | "arshad"; name: string; roomCode: string }) => void;
@@ -31,7 +18,7 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
   const [shake, setShake] = useState(false);
   const [role, setRole] = useState<"shelly" | "arshad" | null>(null);
   const [roleError, setRoleError] = useState("");
-  /** True when the role node is held by another tab (sessionId mismatch or legacy lock). */
+  /** True when Firestore role slot is held by another user (fresh heartbeat). */
   const [roleBlocked, setRoleBlocked] = useState<{ shelly: boolean; arshad: boolean }>({
     shelly: false,
     arshad: false,
@@ -47,12 +34,22 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
       setRoleBlocked({ shelly: false, arshad: false });
       return undefined;
     }
-    const rolesRef = ref(rtdb, `rooms/${normalizedRoom}/roles`);
-    const unsub = onValue(rolesRef, (snap) => {
-      const data = (snap.val() ?? {}) as Record<string, unknown>;
-      const tabId = getOrCreateTabSessionId();
-      const nextShellyBlocked = roleOccupiedByOtherTab(data.shelly, tabId);
-      const nextArshadBlocked = roleOccupiedByOtherTab(data.arshad, tabId);
+    const myId = getOrCreatePersistentUserId();
+    const slotsCol = collection(db, "rooms", normalizedRoom, "roleSlots");
+    const unsub = onSnapshot(slotsCol, (snap) => {
+      const now = Date.now();
+      let nextShellyBlocked = false;
+      let nextArshadBlocked = false;
+      snap.docs.forEach((d) => {
+        const data = d.data() as { holderUserId?: string; heartbeatAt?: number };
+        const hb = typeof data.heartbeatAt === "number" ? data.heartbeatAt : 0;
+        const holder = data.holderUserId;
+        const active = typeof holder === "string" && holder.length > 0 && now - hb < PRESENCE_ONLINE_MAX_AGE_MS;
+        if (!active) return;
+        const occupiedForMe = holder !== myId;
+        if (d.id === "shelly") nextShellyBlocked = occupiedForMe;
+        if (d.id === "arshad") nextArshadBlocked = occupiedForMe;
+      });
       setRoleBlocked((prev) => {
         (["shelly", "arshad"] as const).forEach((k) => {
           const next = k === "shelly" ? nextShellyBlocked : nextArshadBlocked;
@@ -73,54 +70,6 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
       });
     });
     return () => unsub();
-  }, [code]);
-
-  /** Remove ghost role locks when the user is not actively online (crashed tab / no leave). */
-  useEffect(() => {
-    const room = code.trim();
-    if (!room) return undefined;
-    let cancelled = false;
-    const rolesRef = ref(rtdb, `rooms/${room}/roles`);
-    const sweep = async () => {
-      let snap;
-      try {
-        snap = await get(rolesRef);
-      } catch {
-        return;
-      }
-      if (cancelled) return;
-      const data = (snap.val() ?? {}) as Record<string, { userId?: string; sessionId?: string } | undefined>;
-      for (const key of ["shelly", "arshad"] as const) {
-        const entry = data[key];
-        const sid = typeof entry?.sessionId === "string" ? entry.sessionId : "";
-        if (!sid) continue;
-        let stSnap;
-        try {
-          stSnap = await get(ref(rtdb, `status/${room}/${sid}`));
-        } catch {
-          continue;
-        }
-        const v = stSnap.val() as { status?: string; ts?: number } | null;
-        const ts = typeof v?.ts === "number" ? v.ts : 0;
-        const isOffline = v?.status === "offline";
-        const staleOffline = isOffline && ts > 0 && Date.now() - ts > STALE_ROLE_LOCK_MS;
-        if (staleOffline) {
-          try {
-            await set(ref(rtdb, `rooms/${room}/roles/${key}`), null);
-          } catch {
-            /* rules / offline */
-          }
-        }
-      }
-    };
-    const unsub = onValue(rolesRef, () => {
-      void sweep();
-    });
-    void sweep();
-    return () => {
-      cancelled = true;
-      unsub();
-    };
   }, [code]);
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { LS_LAST_ACTIVE_KEY } from "@/lib/persistedSession";
+import { LS_LAST_ACTIVE_KEY, LS_SESSION_KEY } from "@/lib/persistedSession";
 
 const INACTIVE_MS = 30 * 60 * 1000;
 const CHECK_INTERVAL_MS = 60 * 1000;
@@ -12,10 +12,12 @@ function touchLastActive(): void {
   }
 }
 
+/** Clear session state only — never wipe persistent identity (UUID) or unrelated keys. */
 function logoutUser(): void {
   try {
     sessionStorage.clear();
-    localStorage.clear();
+    localStorage.removeItem(LS_SESSION_KEY);
+    localStorage.removeItem(LS_LAST_ACTIVE_KEY);
   } catch {
     /* */
   }
