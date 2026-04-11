@@ -380,17 +380,24 @@ export function useSession() {
             at: Date.now(),
           };
         }
+
         if (typeof cur !== "object") {
           return undefined;
         }
-        const o = cur as Record<string, unknown>;
-        const existingSid = o.sessionId;
+
+        const existingSid = (cur as Record<string, unknown>).sessionId;
+
         if (!existingSid || typeof existingSid !== "string") {
           return undefined;
         }
+
         if (existingSid === tabSessionId) {
-          return { ...o, at: Date.now() };
+          return {
+            ...(cur as Record<string, unknown>),
+            at: Date.now(),
+          };
         }
+
         return undefined;
       });
       if (!txResult.committed) {
