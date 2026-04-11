@@ -20,9 +20,6 @@ import {
   Paperclip,
   Check,
   MoreVertical,
-  Ghost,
-  Eye,
-  EyeOff,
   WifiOff,
   Vibrate,
 } from "lucide-react";
@@ -37,7 +34,7 @@ import {
 import { db, rtdb } from "@/lib/firebase";
 import { cn, formatDate, formatLastSeen } from "@/lib/utils";
 import { useMessages } from "@/hooks/useMessages";
-import { useWebRTC } from "@/hooks/useWebRTC";
+import { useWebRTC, type CallStatus } from "@/hooks/useWebRTC";
 import { useMediaUpload } from "@/hooks/useMediaUpload";
 import { usePresence, useNetworkStatus } from "@/hooks/useSession";
 import { useTypingIndicator } from "@/hooks/useTypingIndicator";
@@ -62,6 +59,10 @@ import AdminPanel from "@/components/AdminPanel";
 import type { Message } from "@/hooks/useMessages";
 import { formatRecordingClock } from "@/lib/formatDuration";
 import { vibrateShort } from "@/lib/haptics";
+import {
+  startOrContinueIncomingCallRingtone,
+  stopIncomingCallRingtone,
+} from "@/lib/incomingCallRingtone";
 
 const TYPING_DEBOUNCE_MS = 1500;
 
@@ -172,6 +173,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const otherNameForNotifRef = useRef("");
   const lastSoundAtRef = useRef(0);
+  const prevCallStatusForRingtoneRef = useRef<CallStatus | null>(null);
 
   const { settings, updateSetting } = useAdmin();
 
@@ -203,8 +205,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
   otherNameForNotifRef.current = otherName;
 
-  const { profile, uploading: dpUploading, uploadDp, deleteDp, getDpUrl, updateReadReceiptsEnabled } =
-    useProfile(userId);
+  const { profile, uploading: dpUploading, uploadDp, deleteDp, getDpUrl } = useProfile(userId);
   const otherDpUrl = resolvedOtherId ? getDpUrl(resolvedOtherId) : null;
 
   const roomReadReceiptsEnabled = settings.readReceiptsEnabled !== false;
@@ -373,6 +374,17 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   } = useWebRTC(ROOM_ID, userId, sendCallEvent, () => setMissedCallBanner(true));
 
   useEffect(() => {
+    const prev = prevCallStatusForRingtoneRef.current;
+    prevCallStatusForRingtoneRef.current = callStatus;
+    if (prev === null) return;
+    const wasRinging = prev === "incoming" || prev === "calling";
+    const isRinging = callStatus === "incoming" || callStatus === "calling";
+    if (wasRinging && !isRinging) {
+      stopIncomingCallRingtone();
+    }
+  }, [callStatus]);
+
+  useEffect(() => {
     if (!missedCallBanner) return undefined;
     const t = window.setTimeout(() => setMissedCallBanner(false), 4500);
     return () => window.clearTimeout(t);
@@ -462,14 +474,12 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   }, [roomCode, incomingCallId, callStatus, answerCall, rejectCall, setIsMinimized]);
 
   const keywordLists = useMemo(() => resolveKeywordLists(settings), [settings]);
-  const lastKeywordDedupeRef = useRef("");
 
   const runKeywordCommand = useCallback(
     (messageText: string) => {
       if (!messageText || !messageText.trim()) return false;
       const normalized = normalize(messageText);
       if (!normalized) return false;
-      if (lastKeywordDedupeRef.current === normalized) return true;
 
       const result = handleKeywordNormalized(normalized, {
         settings,
@@ -477,22 +487,12 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         lists: keywordLists,
         setRevealMode: setShowDeleted,
         setGhostMode,
-        setReadReceipt: (val) => {
-          void updateReadReceiptsEnabled(val);
-        },
         setShowAdmin,
       });
 
-      if (!result.handled) return false;
-
-      if (result.resetDedupe) {
-        lastKeywordDedupeRef.current = "";
-      } else {
-        lastKeywordDedupeRef.current = normalized;
-      }
-      return true;
+      return result.handled;
     },
-    [keywordLists, settings, adminStealthRead, updateReadReceiptsEnabled, setShowDeleted, setGhostMode, setShowAdmin]
+    [keywordLists, settings, adminStealthRead, setShowDeleted, setGhostMode, setShowAdmin]
   );
 
   /** Foreground-only chat alerts via Firestore (no FCM). */
@@ -570,15 +570,25 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
           }
         }
 
-        const now = Date.now();
-        if (now - lastSoundAtRef.current > 450) {
-          lastSoundAtRef.current = now;
+        const isIncomingCallRing =
+          (data.type as string) === "call" && (data.callStatus as string) === "calling";
+        if (isIncomingCallRing) {
           try {
-            const audio = new Audio("/notification.mp3");
-            audio.volume = 1;
-            void audio.play().catch(() => {});
+            startOrContinueIncomingCallRingtone();
           } catch {
             /* */
+          }
+        } else {
+          const now = Date.now();
+          if (now - lastSoundAtRef.current > 450) {
+            lastSoundAtRef.current = now;
+            try {
+              const audio = new Audio("/notification.mp3");
+              audio.volume = 1;
+              void audio.play().catch(() => {});
+            } catch {
+              /* */
+            }
           }
         }
 
@@ -594,6 +604,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
 
     return () => {
       unsub();
+      stopIncomingCallRingtone();
     };
   }, [ROOM_ID, userId, settings.notificationsEnabled]);
 
@@ -999,9 +1010,15 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             </p>
           </div>
 
-          {settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true && (
-            <div title="Read receipts hidden (others won't see blue ticks)" className="text-white/20 flex-shrink-0">
-              <EyeOff className="w-4 h-4" />
+          {(ghostMode ||
+            showDeleted ||
+            (settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true)) && (
+            <div className="flex items-center gap-1 ml-1 flex-shrink-0">
+              {ghostMode && <span className="text-sm opacity-80" title="Ghost mode">👻</span>}
+              {showDeleted && <span className="text-sm opacity-80" title="Reveal mode">👁</span>}
+              {settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true && (
+                <span className="text-sm opacity-80" title="Read receipts hidden from others">🫣</span>
+              )}
             </div>
           )}
 
@@ -1315,7 +1332,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
 
               <textarea
                 className={cn(
-                  "flex-1 bg-transparent placeholder-white/20 resize-none text-sm leading-relaxed focus:outline-none max-h-36 py-2",
+                  "flex-1 bg-transparent placeholder-white/20 px-3 py-2 text-sm min-h-[40px] max-h-[80px] resize-none leading-tight focus:outline-none",
                   ghostMode ? "text-violet-200 placeholder-violet-300/30" : "text-white"
                 )}
                 placeholder={
@@ -1335,35 +1352,23 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
 
               <div className="flex items-center gap-1 flex-shrink-0">
                 {!editingMsg &&
-                  (showDeleted ||
-                    ghostMode ||
-                    (settings.allowReadReceiptToggle && profile.readReceiptsEnabled !== true)) && (
-                  <div className="flex items-center gap-2 mr-2 flex-wrap justify-end max-w-[min(11rem,42vw)]" aria-live="polite">
-                    {showDeleted && (
-                      <span
-                        title="Reveal mode"
-                        className="text-[10px] font-medium bg-violet-600/95 text-white px-2 py-0.5 rounded-md flex items-center gap-0.5 shrink-0"
-                      >
-                        <Eye className="w-3 h-3 opacity-90" />
-                        Reveal
-                      </span>
-                    )}
+                  (ghostMode ||
+                    showDeleted ||
+                    (settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true)) && (
+                  <div className="flex items-center gap-1 ml-2 flex-shrink-0" aria-live="polite">
                     {ghostMode && (
-                      <span
-                        title="Ghost mode"
-                        className="text-[10px] font-medium bg-white/15 text-white/95 px-2 py-0.5 rounded-md flex items-center gap-0.5 shrink-0"
-                      >
-                        <Ghost className="w-3 h-3" />
-                        Ghost
+                      <span className="text-xs opacity-70" title="Ghost mode">
+                        👻
                       </span>
                     )}
-                    {settings.allowReadReceiptToggle && profile.readReceiptsEnabled !== true && (
-                      <span
-                        title="Read signals on — others see when you've read"
-                        className="text-[10px] font-medium bg-sky-600/95 text-white px-2 py-0.5 rounded-md flex items-center gap-0.5 shrink-0"
-                      >
-                        <Check className="w-3 h-3" />
-                        Read
+                    {showDeleted && (
+                      <span className="text-xs opacity-70" title="Reveal mode">
+                        👁
+                      </span>
+                    )}
+                    {settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true && (
+                      <span className="text-xs opacity-70" title="Read receipts hidden from others">
+                        🫣
                       </span>
                     )}
                   </div>

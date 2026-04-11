@@ -201,11 +201,6 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
       label: "Ghost mode",
       hint: `Off tokens: ${offHints(settings.ghostKeywords)}`,
     },
-    {
-      key: "readReceiptKeywords",
-      label: "Read receipts toggle",
-      hint: `Off tokens: ${offHints(settings.readReceiptKeywords)}`,
-    },
   ];
 
   return (

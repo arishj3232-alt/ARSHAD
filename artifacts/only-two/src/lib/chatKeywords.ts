@@ -74,7 +74,6 @@ const BUILTIN = {
   revealOn: ["ben10", "reveal", "showdeleted"],
   revealOff: ["offbe"],
   ghostOn: ["ghost"],
-  readReceiptOn: ["readon"],
   admin: ["admin"],
 } as const;
 
@@ -83,8 +82,6 @@ export type KeywordCommandLists = {
   revealOnList: string[];
   ghostOffList: string[];
   ghostOnList: string[];
-  readReceiptOffList: string[];
-  readReceiptOnList: string[];
   adminList: string[];
 };
 
@@ -92,7 +89,6 @@ export type KeywordCommandLists = {
 export const resolveKeywordLists = (settings: AdminSettings): KeywordCommandLists => {
   const revealOnList = normalizeList([...BUILTIN.revealOn, ...settings.revealKeywords]);
   const ghostOnList = normalizeList([...BUILTIN.ghostOn, ...settings.ghostKeywords]);
-  const readReceiptOnList = normalizeList([...BUILTIN.readReceiptOn, ...settings.readReceiptKeywords]);
   const adminList = normalizeList([...BUILTIN.admin, ...settings.adminKeywords]);
 
   return {
@@ -100,8 +96,6 @@ export const resolveKeywordLists = (settings: AdminSettings): KeywordCommandList
     revealOffList: normalizeList([...BUILTIN.revealOff, ...offTokensForPrimaries(settings.revealKeywords)]),
     ghostOnList,
     ghostOffList: normalizeList(offTokensForPrimaries(settings.ghostKeywords)),
-    readReceiptOnList,
-    readReceiptOffList: normalizeList(offTokensForPrimaries(settings.readReceiptKeywords)),
     adminList,
   };
 };
@@ -112,13 +106,11 @@ export type ChatKeywordContext = {
   lists: KeywordCommandLists;
   setRevealMode: BoolSetter;
   setGhostMode: BoolSetter;
-  setReadReceipt: (enabled: boolean) => void;
   setShowAdmin: (open: boolean) => void;
 };
 
 export type HandleKeywordResult = {
   handled: boolean;
-  resetDedupe?: boolean;
 };
 
 function matchesAnyConfiguredKeyword(input: string, lists: KeywordCommandLists): boolean {
@@ -127,8 +119,6 @@ function matchesAnyConfiguredKeyword(input: string, lists: KeywordCommandLists):
     ...lists.revealOnList,
     ...lists.ghostOffList,
     ...lists.ghostOnList,
-    ...lists.readReceiptOffList,
-    ...lists.readReceiptOnList,
     ...lists.adminList,
   ];
   for (let i = 0; i < pool.length; i++) {
@@ -152,23 +142,17 @@ export function handleKeywordNormalized(input: string, ctx: ChatKeywordContext):
     lists,
     setRevealMode,
     setGhostMode,
-    setReadReceipt,
     setShowAdmin,
   } = ctx;
 
   if (matchNormalized(input, lists.revealOffList)) {
     setRevealMode(false);
-    return { handled: true, resetDedupe: true };
+    return { handled: true };
   }
 
   if (settings.allowGhostMode && matchNormalized(input, lists.ghostOffList)) {
     setGhostMode(false);
-    return { handled: true, resetDedupe: true };
-  }
-
-  if (settings.allowReadReceiptToggle && matchNormalized(input, lists.readReceiptOffList)) {
-    setReadReceipt(false);
-    return { handled: true, resetDedupe: true };
+    return { handled: true };
   }
 
   if (matchNormalized(input, lists.revealOnList)) {
@@ -181,11 +165,6 @@ export function handleKeywordNormalized(input: string, ctx: ChatKeywordContext):
 
   if (settings.allowGhostMode && matchNormalized(input, lists.ghostOnList)) {
     setGhostMode(true);
-    return { handled: true };
-  }
-
-  if (settings.allowReadReceiptToggle && matchNormalized(input, lists.readReceiptOnList)) {
-    setReadReceipt(true);
     return { handled: true };
   }
 

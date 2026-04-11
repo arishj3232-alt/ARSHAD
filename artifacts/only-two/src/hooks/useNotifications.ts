@@ -4,6 +4,10 @@ import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, getFirebaseMessaging } from "@/lib/firebase";
 import { getFcmTokenWithFirebase } from "@/lib/fcmInit";
 import { getVibrationPreference } from "@/lib/vibrationPreference";
+import {
+  startOrContinueIncomingCallRingtone,
+  stopIncomingCallRingtone,
+} from "@/lib/incomingCallRingtone";
 
 /**
  * FCM: Firebase `getToken` only (no manual PushManager). Foreground via `onMessage`; background via `public/firebase-messaging-sw.js` (generated at build).
@@ -74,11 +78,16 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
       }
 
       try {
-        const audio = new Audio("/notification.mp3");
-        audio.volume = 1;
-        void audio.play().catch(() => {
-          console.warn("Audio blocked");
-        });
+        if (d.type === "call") {
+          startOrContinueIncomingCallRingtone();
+        } else {
+          stopIncomingCallRingtone();
+          const audio = new Audio("/notification.mp3");
+          audio.volume = 1;
+          void audio.play().catch(() => {
+            console.warn("Audio blocked");
+          });
+        }
       } catch {
         console.warn("Audio error");
       }

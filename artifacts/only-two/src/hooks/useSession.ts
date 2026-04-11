@@ -8,13 +8,17 @@ import {
   getDocs,
   onSnapshot,
 } from "firebase/firestore";
-import { ref, set, onDisconnect, onValue, get, serverTimestamp, remove, runTransaction, update as rtdbUpdate } from "firebase/database";
+import { ref, set, onDisconnect, onValue, get, serverTimestamp, remove, runTransaction, update } from "firebase/database";
 import { db, rtdb } from "@/lib/firebase";
 import {
+  LS_SESSION_KEY,
+  SESSION_TTL_MS,
   parsePersistedSession,
   writePersistedSession,
   clearPersistedSession,
+  bumpPersistedSessionActivity,
 } from "@/lib/persistedSession";
+import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
 
 const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
 const MAX_OTHER_USERS = 1;          // block a 3rd user (room is for 2)
@@ -170,7 +174,17 @@ export function useSession() {
       let storedRoleRaw = sessionStorage.getItem("onlytwo-role");
       let storedRoom = sessionStorage.getItem("onlytwo-room");
 
-      const persisted = parsePersistedSession(localStorage.getItem("session"));
+      const persisted = parsePersistedSession(localStorage.getItem(LS_SESSION_KEY));
+      if (
+        !persisted &&
+        sessionStorage.getItem("onlytwo-user-id") &&
+        !localStorage.getItem(LS_SESSION_KEY)
+      ) {
+        sessionStorage.clear();
+        storedUserId = null;
+        storedRoleRaw = null;
+        storedRoom = null;
+      }
       if (persisted) {
         if (!storedUserId) {
           sessionStorage.setItem("onlytwo-user-id", persisted.userId);
@@ -207,6 +221,7 @@ export function useSession() {
       }
       const storedRole = storedRoleRaw as SessionRole;
       try {
+        const tabSid = getOrCreateTabSessionId();
         const roleRef = ref(rtdb, `rooms/${storedRoom}/roles/${storedRole}`);
         const snapOrTimeout = await withTimeout(get(roleRef), 3000);
         if (snapOrTimeout === "timeout") {
@@ -216,7 +231,7 @@ export function useSession() {
           return;
         }
         const snap = snapOrTimeout;
-        const val = snap.val() as { userId?: string; userName?: string } | string | null;
+        const val = snap.val() as { userId?: string; userName?: string; sessionId?: string } | string | null;
         const ownerId = typeof val === "string" ? val : val?.userId;
         if (ownerId !== storedUserId) {
           clearPersistedSession();
@@ -225,7 +240,30 @@ export function useSession() {
           return;
         }
         const fallbackName = storedRole === "shelly" ? "Shelly" : "Arshad";
-        const userName = sessionStorage.getItem("onlytwo-user-name") ?? (typeof val === "object" && val?.userName ? val.userName : fallbackName);
+        const userName =
+          sessionStorage.getItem("onlytwo-user-name") ??
+          (typeof val === "object" && val?.userName ? val.userName : fallbackName);
+        const remoteSid =
+          typeof val === "object" && val !== null && typeof val.sessionId === "string" ? val.sessionId : null;
+        if (remoteSid !== null) {
+          if (remoteSid !== tabSid) {
+            clearPersistedSession();
+            sessionStorage.clear();
+            if (!cancelled) setIsRecoveringSession(false);
+            return;
+          }
+        } else {
+          if (typeof val === "string") {
+            await set(roleRef, {
+              userId: storedUserId,
+              userName,
+              at: Date.now(),
+              sessionId: tabSid,
+            });
+          } else {
+            await update(roleRef, { sessionId: tabSid });
+          }
+        }
         sessionStorage.setItem("onlytwo-user-name", userName);
         if (!cancelled) {
           armOnlineLifecycle(storedRoom, storedUserId, userName, storedRole);
@@ -267,6 +305,7 @@ export function useSession() {
     const userId = `${normalizedRoomCode}_${roleIdentity.role}`;
     const resolvedName = roleIdentity.userName;
     const selectedRole = roleIdentity.role;
+    const tabSessionId = getOrCreateTabSessionId();
     sessionStorage.setItem("onlytwo-user-id", userId);
     sessionStorage.setItem("onlytwo-user-name", resolvedName);
     sessionStorage.setItem("onlytwo-role", selectedRole);
@@ -325,8 +364,24 @@ export function useSession() {
 
       const roleRef = ref(rtdb, `rooms/${normalizedRoomCode}/roles/${selectedRole}`);
       const txResult = await runTransaction(roleRef, (current) => {
-        if (current) return;
-        return { userId, userName: resolvedName, at: Date.now() };
+        if (current == null) {
+          return { userId, userName: resolvedName, at: Date.now(), sessionId: tabSessionId };
+        }
+        if (typeof current === "string") {
+          return undefined;
+        }
+        if (typeof current !== "object") {
+          return undefined;
+        }
+        const cur = current as Record<string, unknown>;
+        const sid = cur.sessionId;
+        if (typeof sid !== "string" || sid.length === 0) {
+          return undefined;
+        }
+        if (sid === tabSessionId) {
+          return { userId, userName: resolvedName, at: Date.now(), sessionId: tabSessionId };
+        }
+        return undefined;
       });
       if (!txResult.committed) {
         setCodeError("Role already taken in this room");
@@ -379,7 +434,7 @@ export function useSession() {
     updates[`cursors/${roomCode}/${userId}`] = null;
     updates[`typing/${roomCode}/${userId}`] = null;
     updates[`devices/${roomCode}/${userId}`] = null;
-    await rtdbUpdate(ref(rtdb), updates).catch(() => {});
+    await update(ref(rtdb), updates).catch(() => {});
     await deleteDoc(doc(db, "rooms", roomCode, "presence", userId)).catch(() => {});
 
     clearPersistedSession();
@@ -389,6 +444,31 @@ export function useSession() {
     activeRoleRef.current = null;
     setState({ status: "idle" });
   }, [state]);
+
+  useEffect(() => {
+    if (state.status !== "active") return undefined;
+    const onActivity = () => {
+      bumpPersistedSessionActivity();
+    };
+    window.addEventListener("click", onActivity);
+    window.addEventListener("keydown", onActivity);
+    return () => {
+      window.removeEventListener("click", onActivity);
+      window.removeEventListener("keydown", onActivity);
+    };
+  }, [state.status]);
+
+  useEffect(() => {
+    if (state.status !== "active") return undefined;
+    const tick = () => {
+      const p = parsePersistedSession(localStorage.getItem(LS_SESSION_KEY));
+      if (!p || Date.now() - p.lastActive > SESSION_TTL_MS) {
+        void leaveRoom();
+      }
+    };
+    const id = window.setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, [state.status, leaveRoom]);
 
   return { state, codeError, joinRoom, leaveRoom, isRecoveringSession };
 }

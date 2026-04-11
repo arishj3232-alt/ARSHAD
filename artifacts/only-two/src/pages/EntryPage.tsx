@@ -3,9 +3,24 @@ import { Heart, Lock, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { get, onValue, ref, set } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
+import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
 
 /** If last status heartbeat is older than this, treat role lock as stale (ghost session). */
 const STALE_ROLE_LOCK_MS = 60_000;
+
+function roleSlotHeld(val: unknown): boolean {
+  return val != null && val !== "";
+}
+
+/** `undefined` = legacy / string node / missing field → treat as occupied for picker. */
+function roleEntrySessionId(val: unknown): string | undefined {
+  if (val == null || val === "" || typeof val === "string") return undefined;
+  if (typeof val === "object" && val !== null) {
+    const s = (val as { sessionId?: unknown }).sessionId;
+    return typeof s === "string" && s.length > 0 ? s : undefined;
+  }
+  return undefined;
+}
 
 type Props = {
   onJoin: (payload: { role: "shelly" | "arshad"; name: string; roomCode: string }) => void;
@@ -19,7 +34,8 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
   const [shake, setShake] = useState(false);
   const [role, setRole] = useState<"shelly" | "arshad" | null>(null);
   const [roleError, setRoleError] = useState("");
-  const [takenRoles, setTakenRoles] = useState<{ shelly: boolean; arshad: boolean }>({
+  /** True when the role node is held by another tab (sessionId mismatch or legacy lock). */
+  const [roleBlocked, setRoleBlocked] = useState<{ shelly: boolean; arshad: boolean }>({
     shelly: false,
     arshad: false,
   });
@@ -31,31 +47,35 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
   useEffect(() => {
     const normalizedRoom = code.trim();
     if (!normalizedRoom) {
-      setTakenRoles({ shelly: false, arshad: false });
+      setRoleBlocked({ shelly: false, arshad: false });
       return undefined;
     }
     const rolesRef = ref(rtdb, `rooms/${normalizedRoom}/roles`);
     const unsub = onValue(rolesRef, (snap) => {
       const data = (snap.val() ?? {}) as Record<string, unknown>;
-      const nextTaken = {
-        shelly: !!data.shelly,
-        arshad: !!data.arshad,
-      };
-      setTakenRoles((prev) => {
+      const myTabSessionId = getOrCreateTabSessionId();
+      const shellySid = roleEntrySessionId(data.shelly);
+      const arshadSid = roleEntrySessionId(data.arshad);
+      const nextShellyBlocked =
+        roleSlotHeld(data.shelly) && (shellySid === undefined || shellySid !== myTabSessionId);
+      const nextArshadBlocked =
+        roleSlotHeld(data.arshad) && (arshadSid === undefined || arshadSid !== myTabSessionId);
+      setRoleBlocked((prev) => {
         (["shelly", "arshad"] as const).forEach((k) => {
-          if (!prev[k] && nextTaken[k]) {
+          const next = k === "shelly" ? nextShellyBlocked : nextArshadBlocked;
+          if (!prev[k] && next) {
             setTakenAnim((a) => ({ ...a, [k]: true }));
             setTimeout(() => {
               setTakenAnim((a) => ({ ...a, [k]: false }));
             }, 260);
           }
         });
-        return nextTaken;
+        return { shelly: nextShellyBlocked, arshad: nextArshadBlocked };
       });
       setRole((prev) => {
         if (!prev) return prev;
-        if (prev === "shelly" && data.shelly) return null;
-        if (prev === "arshad" && data.arshad) return null;
+        if (prev === "shelly" && nextShellyBlocked) return null;
+        if (prev === "arshad" && nextArshadBlocked) return null;
         return prev;
       });
     });
@@ -180,33 +200,43 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
                 <div className="flex gap-3">
                   <button
                     type="button"
-                    onClick={() => { if (!takenRoles.shelly) { setRole("shelly"); setRoleError(""); } }}
-                    disabled={takenRoles.shelly}
+                    onClick={() => {
+                      if (!roleBlocked.shelly) {
+                        setRole("shelly");
+                        setRoleError("");
+                      }
+                    }}
+                    disabled={roleBlocked.shelly}
                     className={cn(
                       "flex-1 py-3 rounded-xl border transition transform hover:scale-105 active:scale-95",
-                      takenRoles.shelly && "opacity-50 cursor-not-allowed hover:scale-100 active:scale-100",
+                      roleBlocked.shelly && "opacity-50 cursor-not-allowed hover:scale-100 active:scale-100",
                       takenAnim.shelly && "scale-95",
                       role === "shelly"
                         ? "bg-pink-500 text-white border-pink-500 shadow-lg shadow-pink-500/30"
                         : "bg-gray-900 text-gray-300 border-gray-700"
                     )}
                   >
-                    💖 Shelly {takenRoles.shelly ? "• Taken" : ""}
+                    💖 Shelly{roleBlocked.shelly ? " - occupied" : ""}
                   </button>
                   <button
                     type="button"
-                    onClick={() => { if (!takenRoles.arshad) { setRole("arshad"); setRoleError(""); } }}
-                    disabled={takenRoles.arshad}
+                    onClick={() => {
+                      if (!roleBlocked.arshad) {
+                        setRole("arshad");
+                        setRoleError("");
+                      }
+                    }}
+                    disabled={roleBlocked.arshad}
                     className={cn(
                       "flex-1 py-3 rounded-xl border transition transform hover:scale-105 active:scale-95",
-                      takenRoles.arshad && "opacity-50 cursor-not-allowed hover:scale-100 active:scale-100",
+                      roleBlocked.arshad && "opacity-50 cursor-not-allowed hover:scale-100 active:scale-100",
                       takenAnim.arshad && "scale-95",
                       role === "arshad"
                         ? "bg-blue-500 text-white border-blue-500 shadow-lg shadow-blue-500/30"
                         : "bg-gray-900 text-gray-300 border-gray-700"
                     )}
                   >
-                    🔥 Arshad {takenRoles.arshad ? "• Taken" : ""}
+                    🔥 Arshad{roleBlocked.arshad ? " - occupied" : ""}
                   </button>
                 </div>
                 {!role && roleError && <p className="text-red-400 text-sm mt-2">{roleError}</p>}
