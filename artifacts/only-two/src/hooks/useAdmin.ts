@@ -24,6 +24,10 @@ export type AdminSettings = {
   cursorPresenceEnabled: boolean;
   notificationsEnabled: boolean;
   allowGhostMode: boolean;
+  /** Synced via RTDB; shared ghost compose mode for the room. */
+  ghostMode: boolean;
+  /** Synced via RTDB; reveal deleted message content for the room. */
+  showDeleted: boolean;
   /** Room-wide: show send/read ticks and mark messages seen (synced via RTDB). */
   readReceiptsEnabled: boolean;
   allowReadReceiptToggle: boolean;
@@ -65,6 +69,8 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   cursorPresenceEnabled: true,
   notificationsEnabled: true,
   allowGhostMode: true,
+  ghostMode: false,
+  showDeleted: false,
   readReceiptsEnabled: true,
   allowReadReceiptToggle: true,
   reactionEmojis: ["❤️", "😂", "👍", "😮", "🔥"],
@@ -130,6 +136,10 @@ export function useAdmin() {
               ? data.readReceiptsEnabled
               : DEFAULT_SETTINGS.readReceiptsEnabled;
           const d = data as Record<string, unknown>;
+          const ghostModeVal =
+            typeof d.ghostMode === "boolean" ? d.ghostMode : DEFAULT_SETTINGS.ghostMode;
+          const showDeletedVal =
+            typeof d.showDeleted === "boolean" ? d.showDeleted : DEFAULT_SETTINGS.showDeleted;
           const adminKeywords = parseKeywordArray(d, "adminKeywords", "adminKeyword", DEFAULT_SETTINGS.adminKeywords);
           const revealKeywords = parseKeywordArray(d, "revealKeywords", "revealKeyword", DEFAULT_SETTINGS.revealKeywords);
           const ghostKeywords = parseKeywordArray(d, "ghostKeywords", "ghostKeyword", DEFAULT_SETTINGS.ghostKeywords);
@@ -142,6 +152,8 @@ export function useAdmin() {
           setSettings({
             ...DEFAULT_SETTINGS,
             ...data,
+            ghostMode: ghostModeVal,
+            showDeleted: showDeletedVal,
             readReceiptsEnabled: readReceipts,
             viewOnceTimerSeconds: resolvedTimer,
             videoCallEnabled: resolvedVideoCallEnabled,

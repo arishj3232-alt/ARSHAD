@@ -629,8 +629,11 @@ function ChatMessage({
   void _isOwn;
   const isOwn = message.senderId === currentUserId;
   const rawReceiptLabel = message.seen ? "read" : message.delivered ? "delivered" : "sent";
-  const receiptLabelBase =
-    maskReadReceiptInUi && rawReceiptLabel === "read" ? "delivered" : rawReceiptLabel;
+  const shouldMaskRead =
+    maskReadReceiptInUi === true &&
+    message.seen === true &&
+    message.senderId !== currentUserId;
+  const receiptLabelBase = shouldMaskRead ? "delivered" : rawReceiptLabel;
   const showSendingReceipt =
     message.localStatus === "sending" &&
     !message.delivered &&
@@ -994,12 +997,6 @@ function ChatMessage({
             )}
             style={{ animation: "msgFadeIn 0.2s ease-out" }}
           >
-            {isGhost && (
-              <div className="absolute -top-2 -right-1 text-[9px] bg-violet-900/80 border border-violet-500/30 text-violet-300/70 rounded-full px-1.5 py-0.5 z-10">
-                👻
-              </div>
-            )}
-
             {message.replyToId && (
               <button
                 onClick={() => onScrollTo?.(message.replyToId!)}

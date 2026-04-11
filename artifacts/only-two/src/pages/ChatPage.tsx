@@ -158,8 +158,13 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const optimisticPendingRef = useRef<{ tempId: string; docId: string } | null>(null);
 
   // --- Command-driven states ---
-  const [ghostMode, setGhostMode] = useState(false);
-  const [showDeleted, setShowDeleted] = useState(false); // persistent toggle
+  const [hasAdminAccess, setHasAdminAccess] = useState(() => {
+    try {
+      return sessionStorage.getItem("onlytwo-admin-access") === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -205,11 +210,45 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
   otherNameForNotifRef.current = otherName;
 
-  const { profile, uploading: dpUploading, uploadDp, deleteDp, getDpUrl } = useProfile(userId);
+  const { profile, uploading: dpUploading, uploadDp, deleteDp, getDpUrl, updateReadReceiptsEnabled } =
+    useProfile(userId);
   const otherDpUrl = resolvedOtherId ? getDpUrl(resolvedOtherId) : null;
 
   const roomReadReceiptsEnabled = settings.readReceiptsEnabled !== false;
-  const myReadReceiptsHide = profile.readReceiptsEnabled === true;
+  const profileHidesReadReceipts = profile.readReceiptsEnabled === true;
+  const ghostMode = settings.ghostMode === true;
+  const setGhostMode = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const prev = settings.ghostMode === true;
+      const resolved = typeof next === "function" ? next(prev) : next;
+      void updateSetting("ghostMode", resolved);
+    },
+    [updateSetting, settings.ghostMode]
+  );
+  const showDeleted = settings.showDeleted === true;
+  const setShowDeleted = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const prev = settings.showDeleted === true;
+      const resolved = typeof next === "function" ? next(prev) : next;
+      void updateSetting("showDeleted", resolved);
+    },
+    [updateSetting, settings.showDeleted]
+  );
+  const grantAdminAccess = useCallback(() => {
+    try {
+      sessionStorage.setItem("onlytwo-admin-access", "1");
+    } catch {
+      /* */
+    }
+    setHasAdminAccess(true);
+  }, []);
+  const openAdminFromKeyword = useCallback(
+    (open: boolean) => {
+      setShowAdmin(open);
+      if (open) grantAdminAccess();
+    },
+    [grantAdminAccess]
+  );
   const { setStatus: setMyStatus } = useUserStatus(roomCode, userId);
   const { otherStatus, otherRecordingKind, otherTs } = useOtherUserStatus(roomCode, resolvedOtherId);
 
@@ -319,7 +358,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     ghostMode,
   });
 
-  const revealDeletedContent = showDeleted && adminStealthRead;
+  const revealDeletedContent = showDeleted === true;
 
   const sendCallEvent = useCallback(
     async (event: {
@@ -482,16 +521,16 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
 
       const result = handleKeywordNormalized(normalized, {
         settings,
-        isAdmin: adminStealthRead,
+        isAdmin: hasAdminAccess,
         lists: keywordLists,
         setRevealMode: setShowDeleted,
         setGhostMode,
-        setShowAdmin,
+        setShowAdmin: openAdminFromKeyword,
       });
 
       return result.handled;
     },
-    [keywordLists, settings, adminStealthRead, setShowDeleted, setGhostMode, setShowAdmin]
+    [keywordLists, settings, hasAdminAccess, setShowDeleted, setGhostMode, openAdminFromKeyword]
   );
 
   /** Foreground-only chat alerts via Firestore (no FCM). */
@@ -610,7 +649,21 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key === "S") { e.preventDefault(); setShowAdmin((p) => !p); }
+      if (e.ctrlKey && e.shiftKey && e.key === "S") {
+        e.preventDefault();
+        setShowAdmin((p) => {
+          const next = !p;
+          if (next) {
+            try {
+              sessionStorage.setItem("onlytwo-admin-access", "1");
+            } catch {
+              /* */
+            }
+            setHasAdminAccess(true);
+          }
+          return next;
+        });
+      }
       if (e.key === "Escape") { setShowAttachMenu(false); setShowDpMenu(false); setShowAdmin(false); setEditingMsg(null); }
     };
     window.addEventListener("keydown", handler);
@@ -1009,17 +1062,25 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             </p>
           </div>
 
-          {(ghostMode ||
-            showDeleted ||
-            (settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true)) && (
-            <div className="flex items-center gap-1 ml-1 flex-shrink-0">
-              {ghostMode && <span className="text-sm opacity-80" title="Ghost mode">👻</span>}
-              {showDeleted && <span className="text-sm opacity-80" title="Reveal mode">👁</span>}
-              {settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true && (
-                <span className="text-sm opacity-80" title="Read receipts hidden from others">🫣</span>
-              )}
-            </div>
-          )}
+          <div className="flex items-center gap-1 ml-2 flex-shrink-0" aria-live="polite">
+            {ghostMode && (
+              <span className="text-xs opacity-70" title="Ghost mode">
+                👻
+              </span>
+            )}
+
+            {showDeleted && (
+              <span className="text-xs opacity-70" title="Reveal mode">
+                👁
+              </span>
+            )}
+
+            {profileHidesReadReceipts && (
+              <span className="text-xs opacity-70" title="Read receipts hidden from others">
+                🔕
+              </span>
+            )}
+          </div>
 
           <div className="flex items-center gap-0.5">
             <HeaderBtn onClick={() => setPanel(panel === "search" ? "none" : "search")} active={panel === "search"} testId="button-search"><Search className="w-4 h-4" /></HeaderBtn>
@@ -1107,7 +1168,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                           setProfileModal({ name: otherName, dpUrl: otherDpUrl, bio: null })
                         }
                         peerOnline={headerPeerOnline}
-                        maskReadReceiptInUi={myReadReceiptsHide}
+                        maskReadReceiptInUi={profileHidesReadReceipts}
                         viewOnceEnabled={settings.viewOnceEnabled}
                         viewOnceTimerMs={viewOnceTimerMs}
                         imageDownloadProtection={settings.imageDownloadProtection}
@@ -1225,6 +1286,20 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                           Remove profile picture
                         </button>
                       )}
+                      {settings.allowReadReceiptToggle && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void updateReadReceiptsEnabled(!profileHidesReadReceipts);
+                            setShowDpMenu(false);
+                          }}
+                          className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm text-left border-t border-white/5"
+                        >
+                          {profileHidesReadReceipts
+                            ? "Show read receipts to others"
+                            : "Hide read receipts from others"}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setShowDpMenu(false)}
@@ -1335,10 +1410,13 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                   ghostMode ? "text-violet-200 placeholder-violet-300/30" : "text-white"
                 )}
                 placeholder={
-                  editingMsg ? "Edit your message…"
-                    : ghostMode ? "👻 Ghost mode — only you can see this…"
-                    : settings.messagingEnabled ? "Write something beautiful…"
-                    : "Messaging is disabled"
+                  editingMsg
+                    ? "Edit your message…"
+                    : ghostMode
+                      ? "Ghost mode — only you can see this…"
+                      : settings.messagingEnabled
+                        ? "Write something beautiful…"
+                        : "Messaging is disabled"
                 }
                 rows={1}
                 value={activeValue}
@@ -1350,28 +1428,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
               />
 
               <div className="flex items-center gap-1 flex-shrink-0">
-                {!editingMsg &&
-                  (ghostMode ||
-                    showDeleted ||
-                    (settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true)) && (
-                  <div className="flex items-center gap-1 ml-2 flex-shrink-0" aria-live="polite">
-                    {ghostMode && (
-                      <span className="text-xs opacity-70" title="Ghost mode">
-                        👻
-                      </span>
-                    )}
-                    {showDeleted && (
-                      <span className="text-xs opacity-70" title="Reveal mode">
-                        👁
-                      </span>
-                    )}
-                    {settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true && (
-                      <span className="text-xs opacity-70" title="Read receipts hidden from others">
-                        🫣
-                      </span>
-                    )}
-                  </div>
-                )}
                 {holdSwipe.open && !editingMsg && (
                   <span
                     className="text-[11px] font-mono tabular-nums text-white/55 animate-pulse mr-0.5 min-w-[2.25rem] text-right"

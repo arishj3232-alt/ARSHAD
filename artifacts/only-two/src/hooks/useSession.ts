@@ -18,7 +18,7 @@ import {
   clearPersistedSession,
   bumpPersistedSessionActivity,
 } from "@/lib/persistedSession";
-import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
+import { getOrCreateTabSessionId, TAB_SESSION_STORAGE_KEY } from "@/lib/tabSessionId";
 
 const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
 const MAX_OTHER_USERS = 1;          // block a 3rd user (room is for 2)
@@ -81,7 +81,10 @@ async function markOffline(roomCode: string, userId: string): Promise<void> {
     });
   } catch {}
   try {
-    await set(ref(rtdb, `status/${roomCode}/${userId}`), { status: "offline", ts: now });
+    const sid = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(TAB_SESSION_STORAGE_KEY) : null;
+    if (sid) {
+      await set(ref(rtdb, `status/${roomCode}/${sid}`), { status: "offline", ts: now });
+    }
   } catch {}
 }
 
@@ -103,6 +106,7 @@ export function useSession() {
 
   const armOnlineLifecycle = useCallback((roomCode: string, userId: string, userName: string, role: SessionRole) => {
     const now = Date.now();
+    const tabSid = getOrCreateTabSessionId();
     const roleRef = ref(rtdb, `rooms/${roomCode}/roles/${role}`);
 
     roleDisconnectRef.current?.cancel().catch(() => {});
@@ -112,7 +116,7 @@ export function useSession() {
     activeRoleRef.current = role;
 
     statusDisconnectRef.current?.cancel();
-    const rtdbRef = ref(rtdb, `status/${roomCode}/${userId}`);
+    const rtdbRef = ref(rtdb, `status/${roomCode}/${tabSid}`);
     set(rtdbRef, { status: "online", ts: now }).catch(() => {});
     const disconnectHandle = onDisconnect(rtdbRef);
     disconnectHandle.set({ status: "offline", ts: serverTimestamp() }).catch(() => {});
@@ -232,8 +236,7 @@ export function useSession() {
         }
         const snap = snapOrTimeout;
         const val = snap.val() as { userId?: string; userName?: string; sessionId?: string } | string | null;
-        const ownerId = typeof val === "string" ? val : val?.userId;
-        if (ownerId !== storedUserId) {
+        if (val == null || val === "") {
           clearPersistedSession();
           sessionStorage.clear();
           if (!cancelled) setIsRecoveringSession(false);
@@ -328,8 +331,13 @@ export function useSession() {
       const presenceCol = collection(db, "rooms", normalizedRoomCode, "presence");
       const presenceSnap = await getDocs(presenceCol);
       const now = Date.now();
+      const rolePresenceIds = new Set([
+        `${normalizedRoomCode}_shelly`,
+        `${normalizedRoomCode}_arshad`,
+      ]);
 
       const activeOtherCount = presenceSnap.docs.filter((d) => {
+        if (!rolePresenceIds.has(d.id)) return false;
         if (d.id === userId) return false;          // own doc — always allow rejoin
         const data = d.data();
         const ts: number = data.lastSeenTs ?? 0;
@@ -367,8 +375,8 @@ export function useSession() {
         if (cur == null) {
           return { userId, userName: resolvedName, at: Date.now(), sessionId: tabSessionId };
         }
-        if (typeof cur !== "object") {
-          return undefined;
+        if (typeof cur !== "object" || cur === null) {
+          return { userId, userName: resolvedName, at: Date.now(), sessionId: tabSessionId };
         }
         const o = cur as Record<string, unknown>;
         const sid = o.sessionId;
@@ -381,11 +389,7 @@ export function useSession() {
         return undefined;
       });
       if (!txResult.committed) {
-        setCodeError("Role already taken in this room");
-        clearPersistedSession();
-        sessionStorage.clear();
-        setState({ status: "blocked" });
-        return;
+        throw new Error("ROLE_OCCUPIED");
       }
       // Write own presence doc (merge to preserve any extra fields)
       await setDoc(
@@ -394,9 +398,14 @@ export function useSession() {
         { merge: true }
       );
       armOnlineLifecycle(normalizedRoomCode, userId, resolvedName, selectedRole);
-    } catch {
+    } catch (err) {
       clearPersistedSession();
       sessionStorage.clear();
+      if (err instanceof Error && err.message === "ROLE_OCCUPIED") {
+        setCodeError("Role already taken in this room");
+        setState({ status: "blocked" });
+        return;
+      }
       setState({ status: "idle" });
       setCodeError("Connection failed. Please try again.");
     }
@@ -406,6 +415,8 @@ export function useSession() {
     const userId = activeUserIdRef.current ?? (state.status === "active" ? state.user.id : sessionStorage.getItem("onlytwo-user-id"));
     const roomCode = activeRoomCodeRef.current ?? (state.status === "active" ? state.roomCode : sessionStorage.getItem("onlytwo-room"));
     const role = activeRoleRef.current ?? sessionStorage.getItem("onlytwo-role");
+    const statusSessionId =
+      typeof sessionStorage !== "undefined" ? sessionStorage.getItem(TAB_SESSION_STORAGE_KEY) : null;
     if (!userId || !roomCode || !role) {
       clearPersistedSession();
       sessionStorage.clear();
@@ -427,7 +438,9 @@ export function useSession() {
     roleDisconnectRef.current = null;
     const updates: Record<string, null> = {};
     updates[`rooms/${roomCode}/roles/${role}`] = null;
-    updates[`status/${roomCode}/${userId}`] = null;
+    if (statusSessionId) {
+      updates[`status/${roomCode}/${statusSessionId}`] = null;
+    }
     updates[`cursors/${roomCode}/${userId}`] = null;
     updates[`typing/${roomCode}/${userId}`] = null;
     updates[`devices/${roomCode}/${userId}`] = null;

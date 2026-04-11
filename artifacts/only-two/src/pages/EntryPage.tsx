@@ -8,12 +8,18 @@ import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
 /** If last status heartbeat is older than this, treat role lock as stale (ghost session). */
 const STALE_ROLE_LOCK_MS = 60_000;
 
-/** Slot held by someone other than this tab; non-object / missing sessionId / legacy string → occupied. */
 function roleOccupiedByOtherTab(roleNode: unknown, tabId: string): boolean {
   if (roleNode == null || roleNode === "") return false;
-  if (typeof roleNode !== "object" || roleNode === null) return true;
+
+  // non-object (string / invalid) → occupied
+  if (typeof roleNode !== "object") return true;
+
   const sid = (roleNode as { sessionId?: unknown }).sessionId;
+
+  // missing / invalid sessionId → occupied
   if (typeof sid !== "string" || sid.length === 0) return true;
+
+  // occupied if different tab
   return sid !== tabId;
 }
 
@@ -87,21 +93,22 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
         return;
       }
       if (cancelled) return;
-      const data = (snap.val() ?? {}) as Record<string, { userId?: string } | undefined>;
+      const data = (snap.val() ?? {}) as Record<string, { userId?: string; sessionId?: string } | undefined>;
       for (const key of ["shelly", "arshad"] as const) {
         const entry = data[key];
-        const uid = entry?.userId;
-        if (!uid) continue;
+        const sid = typeof entry?.sessionId === "string" ? entry.sessionId : "";
+        if (!sid) continue;
         let stSnap;
         try {
-          stSnap = await get(ref(rtdb, `status/${room}/${uid}`));
+          stSnap = await get(ref(rtdb, `status/${room}/${sid}`));
         } catch {
           continue;
         }
         const v = stSnap.val() as { status?: string; ts?: number } | null;
         const ts = typeof v?.ts === "number" ? v.ts : 0;
-        const looksActive = v?.status === "online" && Date.now() - ts < STALE_ROLE_LOCK_MS;
-        if (!looksActive) {
+        const isOffline = v?.status === "offline";
+        const staleOffline = isOffline && ts > 0 && Date.now() - ts > STALE_ROLE_LOCK_MS;
+        if (staleOffline) {
           try {
             await set(ref(rtdb, `rooms/${room}/roles/${key}`), null);
           } catch {

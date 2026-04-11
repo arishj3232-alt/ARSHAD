@@ -44,13 +44,17 @@ export function useProfile(userId: string | null) {
       const unsub = onValue(profilesRef, (snap) => {
         const data = (snap.val() ?? {}) as Record<string, UserProfile & Record<string, unknown>>;
         setAllProfiles(data as Record<string, UserProfile>);
-        if (userId && data[userId]) {
+        if (userId) {
           const row = data[userId];
-          setProfile({
-            dpUrl: row.dpUrl ?? null,
-            dpHash: row.dpHash ?? null,
-            readReceiptsEnabled: row.readReceiptsEnabled === true,
-          });
+          if (row) {
+            setProfile({
+              dpUrl: row.dpUrl ?? null,
+              dpHash: row.dpHash ?? null,
+              readReceiptsEnabled: row.readReceiptsEnabled === true,
+            });
+          } else {
+            setProfile({ dpUrl: null, dpHash: null, readReceiptsEnabled: false });
+          }
         }
       }, () => {});
       return () => unsub();
