@@ -408,7 +408,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       const lower = trimmed.toLowerCase();
 
       // --- OFF keywords (off + first 2 chars of keyword, case-insensitive) ---
-      if (lower === offKeyword(settings.revealKeyword) && settings.allowReadReceiptToggle) {
+      if (lower === offKeyword(settings.revealKeyword)) {
         setShowDeleted(false);
         return true;
       }
@@ -427,11 +427,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         return true;
       }
 
-      if (trimmed === settings.revealKeyword) {
-        setShowDeleted((prev) => {
-          const next = !prev;
-          return next;
-        });
+      if (trimmed.toLowerCase() === settings.revealKeyword.toLowerCase()) {
+        setShowDeleted((prev) => !prev);
         return true;
       }
 
@@ -559,16 +556,18 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   // SEND / EDIT
   // ============================================================
   const handleSendText = useCallback(async () => {
-    if (!settings.messagingEnabled) return;
     const t = text.trim();
     if (!t) return;
 
+    // Keywords (reveal, admin, ghost, etc.) must work even when Messaging is disabled in admin.
     if (triggerKeyword(t)) {
       setText("");
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       setTyping(false);
       return;
     }
+
+    if (!settings.messagingEnabled) return;
 
     // Rate limit: max 5 messages per 10 seconds
     if (!checkMsgRateLimit()) {

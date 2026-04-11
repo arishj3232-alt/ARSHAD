@@ -214,12 +214,26 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
   const deleteForEveryone = useCallback(
     async (messageId: string, deletedText = "This message was deleted") => {
       const r = doc(db, "rooms", roomId, "messages", messageId);
-      await updateDoc(r, {
+      const snap = await getDoc(r);
+      const data = snap.data() as Record<string, unknown> | undefined;
+      const patch: Record<string, unknown> = {
         deleted: true,
         deletedForEveryone: true,
         text: deletedText,
         mediaUrl: null,
-      });
+      };
+      // Reveal mode reads originalText / originalMediaUrl — backfill if missing (older messages).
+      if (data && (data.originalText == null || data.originalText === "") && typeof data.text === "string") {
+        patch.originalText = data.text;
+      }
+      if (
+        data &&
+        (data.originalMediaUrl == null || data.originalMediaUrl === "") &&
+        typeof data.mediaUrl === "string"
+      ) {
+        patch.originalMediaUrl = data.mediaUrl;
+      }
+      await updateDoc(r, patch);
     },
     [roomId]
   );
