@@ -27,7 +27,14 @@ import {
   Vibrate,
 } from "lucide-react";
 import { ref, set, onValue, onDisconnect, serverTimestamp } from "firebase/database";
-import { rtdb } from "@/lib/firebase";
+import {
+  collection,
+  query,
+  orderBy,
+  limit,
+  onSnapshot,
+} from "firebase/firestore";
+import { db, rtdb } from "@/lib/firebase";
 import { cn, formatDate, formatLastSeen } from "@/lib/utils";
 import { useMessages } from "@/hooks/useMessages";
 import { useWebRTC } from "@/hooks/useWebRTC";
@@ -37,7 +44,9 @@ import { useTypingIndicator } from "@/hooks/useTypingIndicator";
 import { useRateLimit } from "@/hooks/useRateLimit";
 import { useCursorPresence } from "@/hooks/useCursorPresence";
 import { useAdmin } from "@/hooks/useAdmin";
+import { useChatReceipts } from "@/hooks/useChatReceipts";
 import { useNotifications } from "@/hooks/useNotifications";
+import { handleKeyword, normalize, resolveKeywordLists } from "@/lib/chatKeywords";
 import { useVibrationPreference } from "@/hooks/useVibrationPreference";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserStatus, useOtherUserStatus } from "@/hooks/useUserStatus";
@@ -76,11 +85,6 @@ const STATUS_DOT: Record<string, { color: string; label: string }> = {
   offline: { color: "bg-white/20", label: "" },
 };
 
-// Compute "off" keyword from any keyword string — "off" + first 2 chars (lowercase)
-function offKeyword(keyword: string): string {
-  return "off" + keyword.slice(0, 2).toLowerCase();
-}
-
 export default function ChatPage({ userId, userName, roomCode, otherId, onForceLogout, onLeaveRoom }: Props) {
   const ROOM_ID = roomCode;
   const [text, setText] = useState("");
@@ -91,6 +95,12 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const [panel, setPanel] = useState<"none" | "search" | "gallery">("none");
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
+  const [adminStealthRead, setAdminStealthRead] = useState(false);
+  const [profileModal, setProfileModal] = useState<{
+    name: string;
+    dpUrl: string | null;
+    bio: string | null;
+  } | null>(null);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showDpMenu, setShowDpMenu] = useState(false);
   const [viewOnceNext, setViewOnceNext] = useState(false);
@@ -113,13 +123,20 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const audioFileRef = useRef<HTMLInputElement>(null);
   const dpInputRef = useRef<HTMLInputElement>(null);
   const nearBottomRef = useRef(true);
-  const prevMessageCountRef = useRef(0);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const otherNameForNotifRef = useRef("");
+  const lastSoundAtRef = useRef(0);
 
   const { settings, updateSetting } = useAdmin();
   const readReceiptsOn = settings.readReceiptsEnabled !== false;
-  const { notify } = useNotifications(settings.notificationsEnabled, userId);
+
+  useEffect(() => {
+    if (showAdmin) setAdminStealthRead(true);
+  }, [showAdmin]);
+  useNotifications(settings.notificationsEnabled, userId);
   const { vibration, toggleVibration } = useVibrationPreference(userId);
+  const vibrationRef = useRef(vibration);
+  vibrationRef.current = vibration;
   const presence = usePresence(userId, roomCode);
   const { isConnected } = useNetworkStatus();
   const { check: checkMsgRateLimit } = useRateLimit(5, 10_000); // max 5 messages per 10 s
@@ -139,6 +156,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const resolvedOtherId = otherUser?.id ?? otherId ?? null;
   const otherName = otherUser?.name
     ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
+  otherNameForNotifRef.current = otherName;
 
   const { profile, uploading: dpUploading, uploadDp, deleteDp, getDpUrl } = useProfile(userId);
   const otherDpUrl = resolvedOtherId ? getDpUrl(resolvedOtherId) : null;
@@ -280,11 +298,20 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     editMessage,
     deleteForMe,
     deleteForEveryone,
+    markDelivered,
     markSeen,
     addReaction,
     removeReaction,
     markViewOnceViewed,
   } = useMessages(ROOM_ID, userId, viewOnceTimerMs);
+
+  useChatReceipts(messages, userId, markDelivered, markSeen, {
+    readReceiptsEnabled: readReceiptsOn,
+    adminStealthRead,
+    ghostMode,
+  });
+
+  const revealDeletedContent = showDeleted && adminStealthRead;
 
   const sendCallEvent = useCallback(
     async (event: {
@@ -303,6 +330,9 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   );
 
   const { isOtherTyping, setTyping } = useTypingIndicator(ROOM_ID, userId);
+  const peerTypingLine =
+    (isOtherTyping || !!otherUser?.typing) && settings.typingIndicatorEnabled && !ghostMode;
+  const headerPeerOnline = !!resolvedOtherId && !!otherUser?.online;
   const { uploading, progress, uploadMedia } = useMediaUpload();
   const { otherCursors } = useCursorPresence(roomCode, userId, userName);
   const mediaMessages = useMemo(
@@ -416,78 +446,146 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     else if (callStatus === "connecting" || callStatus === "calling") setMyStatus("browsing");
   }, [callStatus, callType, setMyStatus, ghostMode]);
 
-  // ============================================================
-  // CENTRALIZED KEYWORD ENGINE
-  // ============================================================
-  const triggerKeyword = useCallback(
-    (input: string): boolean => {
-      const trimmed = input.trim();
-      const lower = trimmed.toLowerCase();
+  const keywordLists = useMemo(() => resolveKeywordLists(settings), [settings]);
+  const lastKeywordDedupeRef = useRef("");
 
-      // --- OFF keywords (off + first 2 chars of keyword, case-insensitive) ---
-      if (lower === offKeyword(settings.revealKeyword)) {
-        setShowDeleted(false);
-        return true;
-      }
-      if (lower === offKeyword(settings.ghostKeyword) && settings.allowGhostMode) {
-        setGhostMode(false);
-        return true;
-      }
-      if (lower === offKeyword(settings.readReceiptKeyword) && settings.allowReadReceiptToggle) {
-        void updateSetting("readReceiptsEnabled", false);
-        return true;
-      }
+  const runKeywordCommand = useCallback(
+    (messageText: string) => {
+      if (!messageText || !messageText.trim()) return false;
+      const normalized = normalize(messageText);
+      if (lastKeywordDedupeRef.current === normalized) return true;
 
-      // --- ON keywords (exact match, case-sensitive as admin configured) ---
-      if (trimmed === settings.adminKeyword) {
-        setShowAdmin(true);
-        return true;
-      }
+      const result = handleKeyword(messageText, {
+        settings,
+        isAdmin: adminStealthRead,
+        revealOffList: keywordLists.revealOff,
+        revealOnList: keywordLists.revealOn,
+        ghostOffList: keywordLists.ghostOff,
+        ghostOnList: keywordLists.ghostOn,
+        readReceiptOffList: keywordLists.readReceiptOff,
+        readReceiptOnList: keywordLists.readReceiptOn,
+        adminList: keywordLists.admin,
+        setRevealMode: setShowDeleted,
+        setGhostMode,
+        setReadReceipt: (val) => {
+          void updateSetting("readReceiptsEnabled", val);
+        },
+        setShowAdmin,
+      });
 
-      if (trimmed.toLowerCase() === settings.revealKeyword.toLowerCase()) {
-        setShowDeleted((prev) => !prev);
-        return true;
-      }
+      if (!result.handled) return false;
 
-      if (trimmed === settings.ghostKeyword && settings.allowGhostMode) {
-        setGhostMode((prev) => {
-          const next = !prev;
-          return next;
-        });
-        return true;
+      if (result.resetDedupe) {
+        lastKeywordDedupeRef.current = "";
+      } else {
+        lastKeywordDedupeRef.current = normalized;
       }
-
-      if (trimmed === settings.readReceiptKeyword && settings.allowReadReceiptToggle) {
-        void updateSetting("readReceiptsEnabled", !readReceiptsOn);
-        return true;
-      }
-
-      return false;
+      return true;
     },
-    [settings, readReceiptsOn, updateSetting]
+    [keywordLists, settings, adminStealthRead, updateSetting, setShowDeleted, setGhostMode, setShowAdmin]
   );
 
-  // Incoming message notifications
+  /** Foreground-only chat alerts via Firestore (no FCM). */
   useEffect(() => {
-    const prev = prevMessageCountRef.current;
-    const curr = messages.length;
-    if (curr > prev && prev > 0) {
-      const newest = messages[messages.length - 1];
-      if (newest && newest.senderId !== userId && !newest.deleted && !newest.ghost) {
-        const type = newest.type as "text" | "image" | "video" | "audio" | "call";
-        const body =
-          type === "text" ? (newest.text?.slice(0, 80) ?? "") :
-          type === "image" ? "📸 Photo" :
-          type === "video" ? "🎥 Video" :
-          type === "audio" ? "🎤 Voice message" :
-          type === "call"
-            ? `${newest.callType === "video" ? "🎥" : "📞"} ${newest.callStatus === "completed" ? "Call" : "Missed call"}`
-            : `Sent a ${type}`;
-        notify(otherName, body);
+    if (!ROOM_ID || !userId) return undefined;
+    if (!settings.notificationsEnabled) return undefined;
+
+    const lastSeenRef = new Set<string>();
+    let primed = false;
+
+    const q = query(
+      collection(db, "rooms", ROOM_ID, "messages"),
+      orderBy("createdAt", "desc"),
+      limit(40)
+    );
+
+    const previewBody = (data: Record<string, unknown>): string => {
+      const type = (data.type as string) || "text";
+      const text = typeof data.text === "string" ? data.text.trim() : "";
+      if (type === "text" && text) return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+      if (type === "image") return "📸 Photo";
+      if (type === "video") return "🎥 Video";
+      if (type === "audio") return "🎤 Voice message";
+      if (type === "call") {
+        const ct = data.callType === "video" ? "🎥" : "📞";
+        const st = data.callStatus as string | undefined;
+        const label =
+          st === "completed" ? "Call" :
+          st === "missed" || st === "not_picked" ? "Missed call" :
+          st === "declined" ? "Declined call" :
+          "Call";
+        return `${ct} ${label}`;
       }
-    }
-    prevMessageCountRef.current = curr;
-  }, [messages, userId, otherName, notify]);
+      return "Sent you a message";
+    };
+
+    const unsub = onSnapshot(q, (snapshot) => {
+      if (!primed) {
+        snapshot.docs.forEach((d) => lastSeenRef.add(d.id));
+        primed = true;
+        return;
+      }
+
+      snapshot.docChanges().forEach((change) => {
+        if (change.type !== "added") return;
+        const docSnap = change.doc;
+        if (lastSeenRef.has(docSnap.id)) return;
+        lastSeenRef.add(docSnap.id);
+
+        const data = docSnap.data() as Record<string, unknown>;
+        if (data.senderId === userId) return;
+        if (data.deleted === true) return;
+        if (data.ghost === true) return;
+
+        const senderName =
+          typeof data.senderName === "string" && data.senderName.trim()
+            ? data.senderName.trim()
+            : otherNameForNotifRef.current || "New Message";
+        const title = senderName || "New Message";
+        const body = previewBody(data);
+
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          try {
+            const n = new Notification(title, {
+              body: body || "Sent you a message",
+              icon: "/favicon.svg",
+              tag: docSnap.id,
+            });
+            n.onclick = () => {
+              n.close();
+              window.focus();
+            };
+          } catch {
+            /* */
+          }
+        }
+
+        const now = Date.now();
+        if (now - lastSoundAtRef.current > 450) {
+          lastSoundAtRef.current = now;
+          try {
+            const audio = new Audio("/notification.mp3");
+            audio.volume = 1;
+            void audio.play().catch(() => {});
+          } catch {
+            /* */
+          }
+        }
+
+        if (vibrationRef.current === "on" && typeof navigator !== "undefined" && "vibrate" in navigator) {
+          try {
+            navigator.vibrate([200, 100, 200]);
+          } catch {
+            /* */
+          }
+        }
+      });
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [ROOM_ID, userId, settings.notificationsEnabled]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -549,13 +647,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     lastMessageIdRef.current = lastMessage.id;
   }, [messages, userId, isNearBottom, scrollToBottom]);
 
-  // Mark seen (skipped in ghost mode / when read receipts off)
-  useEffect(() => {
-    if (!readReceiptsOn || ghostMode) return;
-    const unseenFromOther = messages.filter((m) => m.senderId !== userId && !m.seen && !m.deleted && !m.ghost);
-    unseenFromOther.forEach((m) => markSeen(m.id));
-  }, [messages, userId, markSeen, readReceiptsOn, ghostMode]);
-
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -577,7 +668,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     if (!t) return;
 
     // Keywords (reveal, admin, ghost, etc.) must work even when Messaging is disabled in admin.
-    if (triggerKeyword(t)) {
+    if (runKeywordCommand(t)) {
       setText("");
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       setTyping(false);
@@ -603,7 +694,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       replyToText: replyTo?.text?.slice(0, 80),
       ghost: ghostMode,
     });
-  }, [text, replyTo, sendMessage, setTyping, settings.messagingEnabled, triggerKeyword, ghostMode, checkMsgRateLimit]);
+  }, [text, replyTo, sendMessage, setTyping, settings.messagingEnabled, runKeywordCommand, ghostMode, checkMsgRateLimit]);
 
   const handleEditSubmit = useCallback(async () => {
     if (!editingMsg || !editText.trim()) return;
@@ -745,15 +836,20 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       <div className="flex flex-col flex-1 min-w-0 h-full">
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 bg-[#0c0c16]/80 backdrop-blur-xl flex-shrink-0">
-          {/* Other user's avatar + presence dot */}
+          {/* Other user's avatar + presence */}
           <div className="relative flex-shrink-0">
+            {headerPeerOnline && (
+              <span className="absolute -inset-0.5 rounded-full pointer-events-none z-0">
+                <span className="absolute inset-0 rounded-full bg-emerald-500/25 animate-ping" style={{ animationDuration: "2.2s" }} />
+              </span>
+            )}
             <button
               type="button"
-              className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20 ring-0 focus:outline-none focus:ring-2 focus:ring-pink-500/50"
+              className="relative z-[1] w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20 ring-0 focus:outline-none focus:ring-2 focus:ring-pink-500/50"
               onClick={() => {
-                if (otherDpUrl) setDpPreviewUrl(otherDpUrl);
+                setProfileModal({ name: otherName, dpUrl: otherDpUrl, bio: null });
               }}
-              title={otherDpUrl ? "View photo" : otherName}
+              title="View profile"
             >
               {otherDpUrl ? (
                 <img src={otherDpUrl} alt={otherName} className="w-full h-full object-cover" />
@@ -761,13 +857,19 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                 <span className="text-white font-bold text-sm select-none">{otherName[0]?.toUpperCase() ?? "?"}</span>
               )}
             </button>
-            <div className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)} title={statusDot.label} />
+            <div
+              className={cn(
+                "absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16] z-[2]",
+                headerPeerOnline ? "bg-emerald-500" : statusDot.color
+              )}
+              title={headerPeerOnline ? "Online" : statusDot.label}
+            />
           </div>
 
           <div className="flex-1 min-w-0">
             <p className="text-white font-semibold text-sm leading-tight">{otherName}</p>
             <p className="text-white/35 text-xs truncate">
-              {isOtherTyping && settings.typingIndicatorEnabled && !ghostMode ? (
+              {peerTypingLine ? (
                 <span className="text-pink-400/70">typing…</span>
               ) : otherStatus === "recording" ? (
                 <span className="text-blue-400/70">🎙 recording…</span>
@@ -775,11 +877,15 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                 <span className="text-yellow-400/70">viewing media…</span>
               ) : roleCount < 2 ? (
                 `Waiting for ${waitingForName}...`
+              ) : headerPeerOnline ? (
+                "Online"
+              ) : settings.lastSeenEnabled && otherUser?.lastSeen ? (
+                `Last seen ${formatLastSeen(otherUser.lastSeen)}`
               ) : roleCount >= 2 ? (
                 "Online"
-              ) : settings.lastSeenEnabled ? (
-                `last seen ${formatLastSeen(otherUser?.lastSeen ?? null)}`
-              ) : ""}
+              ) : (
+                ""
+              )}
             </p>
           </div>
 
@@ -796,7 +902,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
               className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium text-white/45 hover:text-white/75 hover:bg-white/5 border border-white/10 flex-shrink-0 max-w-[9rem] sm:max-w-none"
               title={
                 vibration === "on"
-                  ? "Vibration on (server must send vibration:on in push data)"
+                  ? "Vibration on for new message alerts"
                   : "Vibration off"
               }
               aria-pressed={vibration === "on"}
@@ -880,7 +986,11 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                         deletedForEveryoneText={settings.deletedText}
                         viewOnceLimitText={settings.viewOnceLimitText}
                         dpUrl={msg.senderId !== userId ? otherDpUrl : null}
-                        showDeleted={showDeleted}
+                        revealDeletedContent={revealDeletedContent}
+                        onPeerProfileClick={() =>
+                          setProfileModal({ name: otherName, dpUrl: otherDpUrl, bio: null })
+                        }
+                        peerOnline={headerPeerOnline}
                         readReceiptsEnabled={readReceiptsOn}
                         viewOnceEnabled={settings.viewOnceEnabled}
                         viewOnceTimerMs={viewOnceTimerMs}
@@ -1177,6 +1287,48 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
+        </div>
+      )}
+
+      {profileModal && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4"
+          onClick={() => setProfileModal(null)}
+          role="presentation"
+        >
+          <div
+            className="relative bg-[#14141f] border border-white/10 rounded-2xl p-8 max-w-sm w-full shadow-2xl text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="absolute top-3 right-3 rounded-full bg-white/10 hover:bg-white/20 text-white p-2"
+              aria-label="Close"
+              onClick={() => setProfileModal(null)}
+            >
+              <X className="w-5 h-5" />
+            </button>
+            {profileModal.dpUrl ? (
+              <img
+                src={profileModal.dpUrl}
+                alt=""
+                className="w-40 h-40 rounded-full object-cover mx-auto mb-4 ring-2 ring-white/10"
+              />
+            ) : (
+              <div className="w-40 h-40 rounded-full bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center mx-auto mb-4 text-white text-4xl font-bold">
+                {profileModal.name[0]?.toUpperCase() ?? "?"}
+              </div>
+            )}
+            <h2 className="text-white text-lg font-semibold mb-2">{profileModal.name}</h2>
+            <p className="text-white/45 text-sm mb-6">{profileModal.bio?.trim() || "No bio"}</p>
+            <button
+              type="button"
+              onClick={() => setProfileModal(null)}
+              className="px-6 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm"
+            >
+              Close
+            </button>
+          </div>
         </div>
       )}
 

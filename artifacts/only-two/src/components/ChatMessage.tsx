@@ -15,7 +15,7 @@ import {
   Video,
 } from "lucide-react";
 import { cn, formatTime, formatCallDuration } from "@/lib/utils";
-import type { Message } from "@/hooks/useMessages";
+import type { Message, ReceiptStatus } from "@/hooks/useMessages";
 import TextWithLinks from "@/components/LinkPreview";
 
 type Props = {
@@ -39,16 +39,40 @@ type Props = {
   deletedForEveryoneText?: string;
   viewOnceLimitText?: string;
   dpUrl?: string | null;
-  showDeleted?: boolean;
+  /** Admin + reveal keyword: show original deleted text/media. */
+  revealDeletedContent?: boolean;
   readReceiptsEnabled?: boolean;
   viewOnceEnabled?: boolean;
   viewOnceTimerMs?: number;
   imageDownloadProtection?: boolean;
   onCallAgain?: (type: "audio" | "video") => void;
   onDpPreview?: (url: string) => void;
+  /** Opens peer profile modal (name + photo + bio). */
+  onPeerProfileClick?: () => void;
+  /** Firestore presence: other user online (pulse on avatar). */
+  peerOnline?: boolean;
 };
 
 const WAVEFORM = [4, 7, 12, 18, 22, 28, 24, 16, 10, 20, 30, 26, 14, 8, 22, 18, 12, 6, 16, 24];
+
+function MessageReceiptTicks({
+  status,
+  readReceiptsEnabled,
+}: {
+  status: ReceiptStatus;
+  readReceiptsEnabled: boolean;
+}) {
+  if (!readReceiptsEnabled) {
+    return status === "sent" ? (
+      <Check className="w-3 h-3" />
+    ) : (
+      <CheckCheck className="w-3 h-3 opacity-50" />
+    );
+  }
+  if (status === "sent") return <Check className="w-3 h-3" />;
+  if (status === "delivered") return <CheckCheck className="w-3 h-3" />;
+  return <CheckCheck className="w-3 h-3 text-sky-300" />;
+}
 
 // ─── Audio player ────────────────────────────────────────────────────────────
 function AudioPlayer({ url }: { url: string }) {
@@ -264,8 +288,8 @@ function FullscreenViewer({
 }
 
 // ─── View-once media ─────────────────────────────────────────────────────────
-function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted, viewOnceTimerMs = 15_000, imageDownloadProtection = true }: {
-  message: Message; isOwn: boolean; onViewOnce: (id: string) => void; limitText: string; showDeleted: boolean; viewOnceTimerMs?: number; imageDownloadProtection?: boolean;
+function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, revealDeletedContent, viewOnceTimerMs = 15_000, imageDownloadProtection = true }: {
+  message: Message; isOwn: boolean; onViewOnce: (id: string) => void; limitText: string; revealDeletedContent: boolean; viewOnceTimerMs?: number; imageDownloadProtection?: boolean;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [tick, setTick] = useState(0);
@@ -324,7 +348,7 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted, vie
     };
   }, [expiresAt, fullscreen, isOwn]);
 
-  const revealUrl = showDeleted ? (message.originalMediaUrl ?? message.mediaUrl ?? null) : null;
+  const revealUrl = revealDeletedContent ? (message.originalMediaUrl ?? message.mediaUrl ?? null) : null;
 
   const handleClose = useCallback(() => {
     setFullscreen(false);
@@ -334,7 +358,7 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted, vie
   }, [message.id, onViewOnce]);
 
   // Reveal mode: show original media even if already viewed
-  if (showDeleted && revealUrl && message.viewOnceViewed && !isOwn) {
+  if (revealDeletedContent && revealUrl && message.viewOnceViewed && !isOwn) {
     return (
       <>
         {fullscreen && <FullscreenViewer url={revealUrl} type={message.type as "image" | "video"} onClose={() => setFullscreen(false)} imageDownloadProtection={imageDownloadProtection} />}
@@ -520,13 +544,15 @@ function ChatMessage({
   deletedForEveryoneText = "This message was deleted",
   viewOnceLimitText = "This image has reached its limit",
   dpUrl,
-  showDeleted = false,
+  revealDeletedContent = false,
   readReceiptsEnabled = true,
   viewOnceEnabled = true,
   viewOnceTimerMs = 15_000,
   imageDownloadProtection = true,
   onCallAgain,
   onDpPreview,
+  onPeerProfileClick,
+  peerOnline = false,
 }: Props) {
   void _isOwn;
   const isOwn = message.senderId === currentUserId;
@@ -652,8 +678,7 @@ function ChatMessage({
 
   // ── Deleted for everyone ──────────────────────────────────────────────────
   if (message.deleted || message.deletedForEveryone) {
-    // Reveal mode: show original text
-    if (showDeleted && message.originalText) {
+    if (revealDeletedContent && message.originalText) {
       return (
         <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
           <div className="px-4 py-2.5 rounded-2xl max-w-xs border border-amber-400/30 bg-amber-500/5 text-amber-200/80 text-sm relative">
@@ -664,7 +689,30 @@ function ChatMessage({
       );
     }
 
-    const displayText = message.text || deletedForEveryoneText;
+    const revealMediaUrl =
+      revealDeletedContent && message.originalMediaUrl
+        ? message.originalMediaUrl
+        : null;
+    if (revealMediaUrl && (message.type === "image" || message.type === "video")) {
+      return (
+        <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
+          <div className="rounded-2xl max-w-xs border border-amber-400/30 bg-amber-500/5 p-2 relative">
+            {message.type === "image" ? (
+              imageDownloadProtection ? (
+                <CanvasImage src={revealMediaUrl} alt="Revealed" className="max-w-[260px] max-h-[300px] rounded-xl opacity-90" />
+              ) : (
+                <img src={revealMediaUrl} alt="Revealed" className="max-w-[260px] max-h-[300px] rounded-xl opacity-90" />
+              )
+            ) : (
+              <video src={revealMediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline controls />
+            )}
+            <span className="text-[9px] text-amber-400/50 block mt-1">🔍 Revealed · deleted media</span>
+          </div>
+        </div>
+      );
+    }
+
+    const displayText = message.text?.trim() ? message.text : deletedForEveryoneText;
     const hasStar = displayText.includes("*️⃣");
     return (
       <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
@@ -700,20 +748,34 @@ function ChatMessage({
     >
       {/* Other user avatar */}
       {!isOwn && (
-        <div className="flex-shrink-0 mr-1.5 mb-1 self-end">
+        <div className="flex-shrink-0 mr-1.5 mb-1 self-end relative">
           {dpUrl ? (
             <button
               type="button"
-              className="p-0 border-0 bg-transparent cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-pink-500/50 rounded-full"
+              className="p-0 border-0 bg-transparent cursor-pointer focus:outline-none focus:ring-2 focus:ring-pink-500/50 rounded-full relative"
               onClick={(e) => {
                 e.stopPropagation();
-                onDpPreview?.(dpUrl);
+                if (onPeerProfileClick) onPeerProfileClick();
+                else onDpPreview?.(dpUrl);
               }}
             >
+              {peerOnline && (
+                <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 pointer-events-none z-10">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 m-auto bg-emerald-500 ring-2 ring-[#0c0c16]" />
+                </span>
+              )}
               <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10 pointer-events-none" />
             </button>
           ) : (
-            <div className="w-6 h-6 rounded-full bg-gray-700 ring-1 ring-white/10" />
+            <div className="relative w-6 h-6 rounded-full bg-gray-700 ring-1 ring-white/10">
+              {peerOnline && (
+                <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 m-auto bg-emerald-500 ring-2 ring-[#0c0c16]" />
+                </span>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -918,7 +980,7 @@ function ChatMessage({
                   isOwn={isOwn}
                   onViewOnce={onViewOnce ?? (() => {})}
                   limitText={viewOnceLimitText}
-                  showDeleted={showDeleted}
+                  revealDeletedContent={revealDeletedContent}
                   viewOnceTimerMs={viewOnceTimerMs}
                   imageDownloadProtection={imageDownloadProtection}
                 />
@@ -957,13 +1019,7 @@ function ChatMessage({
                 {!isCallMessage && <span className="text-[10px] opacity-40">{formatTime(message.createdAt)}</span>}
                 {isOwn && !isGhost && (
                   <span className="opacity-50">
-                    {readReceiptsEnabled && message.seen ? (
-                      <CheckCheck className="w-3 h-3 text-sky-300" />
-                    ) : message.delivered ? (
-                      <CheckCheck className="w-3 h-3" />
-                    ) : (
-                      <Check className="w-3 h-3" />
-                    )}
+                    <MessageReceiptTicks status={message.receiptStatus} readReceiptsEnabled={readReceiptsEnabled} />
                   </span>
                 )}
               </div>

@@ -69,12 +69,29 @@ function callUrl(queryString) {
   return self.location.origin + appPath("/call") + q;
 }
 
+function notifTag(payload) {
+  return payload.messageId ? String(payload.messageId) : String(Date.now());
+}
+
+self.addEventListener("push", function (event) {
+  try {
+    if (event.data) {
+      console.log("🔥 SW PUSH (raw):", event.data.json());
+    } else {
+      console.log("🔥 SW PUSH (raw): no data");
+    }
+  } catch (e) {
+    console.log("🔥 SW PUSH (raw): non-json");
+  }
+});
+
 messaging.onBackgroundMessage(function (payload) {
-  console.log(payload);
+  console.log("🔥 SW PUSH:", payload);
   var pn = payload.notification || {};
   var d = payload.data || {};
   var vibrateEnabled = d.vibration === "on";
   var vibratePattern = vibrateEnabled ? [200, 100, 200, 100, 400] : undefined;
+  var tag = notifTag(payload);
 
   if (d.type === "missed_call") {
     var titleMc = pn.title || d.title || "Missed Call";
@@ -90,6 +107,7 @@ messaging.onBackgroundMessage(function (payload) {
       icon: iconMc,
       data: d,
       silent: false,
+      tag: tag,
     };
     if (vibratePattern) missedOpts.vibrate = vibratePattern;
     if (d.callerAvatar && d.callerAvatar.indexOf("http") === 0) {
@@ -113,6 +131,7 @@ messaging.onBackgroundMessage(function (payload) {
       body: bodyCall,
       icon: iconCall,
       data: d,
+      tag: tag,
       requireInteraction: true,
       actions: [
         { action: "accept", title: "Accept" },
@@ -136,6 +155,7 @@ messaging.onBackgroundMessage(function (payload) {
     body: body,
     icon: icon,
     data: d,
+    tag: tag,
   };
   if (vibratePattern) genOpts.vibrate = vibratePattern;
   self.registration.showNotification(title, genOpts);

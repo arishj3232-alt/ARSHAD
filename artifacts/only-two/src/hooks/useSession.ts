@@ -30,6 +30,8 @@ export type SessionUser = {
   joinedAt: Date | null;
   online: boolean;
   lastSeen: Date | null;
+  /** Firestore presence typing flag (mirrors RTDB typing). */
+  typing?: boolean;
 };
 
 export type SessionState =
@@ -411,12 +413,15 @@ export function usePresence(_currentUserId: string | null, roomCode: string | nu
           const data = d.data();
           const ts: number = data.lastSeenTs ?? 0;
           const isStale = now - ts > STALE_MS;
+          const typingAt = typeof data.typingAt === "number" ? data.typingAt : 0;
+          const typingFresh = data.typing === true && typingAt > 0 && now - typingAt < 2800;
           users[d.id] = {
             id: d.id,
             name: (data.name as string) ?? "Unknown",
             joinedAt: null,
             online: !isStale && (data.online === true),
             lastSeen: ts ? new Date(ts) : null,
+            typing: typingFresh,
           };
         });
 

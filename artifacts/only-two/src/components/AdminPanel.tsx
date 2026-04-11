@@ -4,6 +4,7 @@ import { ref, onValue, set } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 import { cn } from "@/lib/utils";
 import type { AdminSettings, ReplyMode } from "@/hooks/useAdmin";
+import { offKeywordToken } from "@/lib/chatKeywords";
 
 type Props = {
   settings: AdminSettings;
@@ -172,10 +173,6 @@ function DevicesPanel({ currentUserId, roomCode }: { currentUserId?: string; roo
 
 type KeywordField = { key: keyof AdminSettings; label: string; hint: string; offPattern?: string };
 
-function buildOffPattern(keyword: string): string {
-  return "off" + keyword.slice(0, 2).toLowerCase();
-}
-
 export default function AdminPanel({ settings, onUpdate, onClose, currentUserId, roomCode }: Props) {
   const [tab, setTab] = useState<"features" | "keywords" | "reactions" | "texts" | "devices">("features");
   const [emojiInput, setEmojiInput] = useState(settings.reactionEmojis.join(" "));
@@ -187,9 +184,9 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
 
   const keywordFields: KeywordField[] = [
     { key: "adminKeyword", label: "Admin Panel", hint: "Opens the admin panel" },
-    { key: "revealKeyword", label: "Reveal Mode (toggle)", hint: `Type to toggle · Type "${buildOffPattern(settings.revealKeyword)}" to force off` },
-    { key: "ghostKeyword", label: "Ghost Mode (toggle)", hint: `Type to toggle · Type "${buildOffPattern(settings.ghostKeyword)}" to force off` },
-    { key: "readReceiptKeyword", label: "Read Receipts (toggle)", hint: `Type to toggle · Type "${buildOffPattern(settings.readReceiptKeyword)}" to force off` },
+    { key: "revealKeyword", label: "Reveal Mode (toggle)", hint: `Type to toggle · Type "${offKeywordToken(settings.revealKeyword)}" to force off` },
+    { key: "ghostKeyword", label: "Ghost Mode (toggle)", hint: `Type to toggle · Type "${offKeywordToken(settings.ghostKeyword)}" to force off` },
+    { key: "readReceiptKeyword", label: "Read Receipts (toggle)", hint: `Type to toggle · Type "${offKeywordToken(settings.readReceiptKeyword)}" to force off` },
   ];
 
   return (

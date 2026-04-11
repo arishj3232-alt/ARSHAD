@@ -18,6 +18,8 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
+export type ReceiptStatus = "sent" | "delivered" | "read";
+
 export type MessageType = "text" | "image" | "video" | "audio" | "call";
 export type CallMessageStatus = "calling" | "missed" | "declined" | "completed" | "not_picked";
 export type CallMediaType = "audio" | "video";
@@ -49,9 +51,19 @@ export type Message = {
   reactions?: Record<string, string>;
   edited?: boolean;
   createdAt: Date | null;
+  /** WhatsApp-style delivery ticks (derived + stored). */
+  receiptStatus: ReceiptStatus;
 };
 
 const PAGE_SIZE = 20;
+
+function deriveReceiptStatus(data: Record<string, unknown>): ReceiptStatus {
+  const r = data.receiptStatus;
+  if (r === "sent" || r === "delivered" || r === "read") return r;
+  if (data.seen === true) return "read";
+  if (data.delivered === true) return "delivered";
+  return "sent";
+}
 
 function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message {
   const data = d.data();
@@ -86,6 +98,7 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     callStatus: data.callStatus as CallMessageStatus | undefined,
     duration: typeof data.duration === "number" ? data.duration : undefined,
     createdAt: (data.createdAt as { toDate: () => Date } | null)?.toDate() ?? null,
+    receiptStatus: deriveReceiptStatus(data),
   };
 }
 
@@ -178,7 +191,8 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
         deletedForEveryone: false,
         deletedFor: {},
         seen: false,
-        delivered: true,
+        delivered: false,
+        receiptStatus: "sent",
         viewOnce: payload.viewOnce ?? false,
         viewOnceViewed: false,
         openedBy: [],
@@ -212,36 +226,51 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
   );
 
   const deleteForEveryone = useCallback(
-    async (messageId: string, deletedText = "This message was deleted") => {
+    async (messageId: string, _deletedText = "This message was deleted") => {
+      void _deletedText;
       const r = doc(db, "rooms", roomId, "messages", messageId);
       const snap = await getDoc(r);
       const data = snap.data() as Record<string, unknown> | undefined;
+      const existingText = typeof data?.text === "string" ? data.text : "";
+      const existingMedia = typeof data?.mediaUrl === "string" ? data.mediaUrl : "";
       const patch: Record<string, unknown> = {
         deleted: true,
         deletedForEveryone: true,
-        text: deletedText,
+        text: "",
         mediaUrl: null,
+        originalText:
+          data?.originalText != null && String(data.originalText).length > 0
+            ? data.originalText
+            : existingText || "",
+        originalMediaUrl:
+          data?.originalMediaUrl != null && String(data.originalMediaUrl).length > 0
+            ? data.originalMediaUrl
+            : existingMedia || "",
       };
-      // Reveal mode reads originalText / originalMediaUrl — backfill if missing (older messages).
-      if (data && (data.originalText == null || data.originalText === "") && typeof data.text === "string") {
-        patch.originalText = data.text;
-      }
-      if (
-        data &&
-        (data.originalMediaUrl == null || data.originalMediaUrl === "") &&
-        typeof data.mediaUrl === "string"
-      ) {
-        patch.originalMediaUrl = data.mediaUrl;
-      }
       await updateDoc(r, patch);
     },
     [roomId]
   );
 
+  const markDelivered = useCallback(
+    async (messageId: string) => {
+      if (!currentUserId) return;
+      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), {
+        delivered: true,
+        receiptStatus: "delivered",
+      });
+    },
+    [roomId, currentUserId]
+  );
+
   const markSeen = useCallback(
     async (messageId: string) => {
       if (!currentUserId) return;
-      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), { seen: true });
+      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), {
+        seen: true,
+        delivered: true,
+        receiptStatus: "read",
+      });
     },
     [roomId, currentUserId]
   );
@@ -317,6 +346,7 @@ export function useMessages(roomId: string, currentUserId: string | null, viewOn
     editMessage,
     deleteForMe,
     deleteForEveryone,
+    markDelivered,
     markSeen,
     addReaction,
     removeReaction,

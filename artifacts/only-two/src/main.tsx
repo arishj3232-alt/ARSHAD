@@ -13,6 +13,12 @@ const missing = getMissingFirebaseEnvKeys();
 if (missing.length > 0) {
   root.render(<MissingEnvScreen keys={missing} />);
 } else {
+  if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+    const base = import.meta.env.BASE_URL ?? "/";
+    const swPath = `${String(base).replace(/\/?$/, "/")}firebase-messaging-sw.js`;
+    void navigator.serviceWorker.register(swPath).catch(() => {});
+  }
+
   void import("./lib/firebase")
     .then(() => import("./App"))
     .then(({ default: App }) =>

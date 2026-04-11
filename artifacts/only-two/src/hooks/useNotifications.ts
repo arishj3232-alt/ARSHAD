@@ -1,18 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
-import { onMessage, isSupported } from "firebase/messaging";
+import { onMessage, isSupported, type MessagePayload } from "firebase/messaging";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, getFirebaseMessaging } from "@/lib/firebase";
 import { getFcmTokenWithFirebase } from "@/lib/fcmInit";
 import { getVibrationPreference } from "@/lib/vibrationPreference";
-
-function playForegroundNotificationSound(): void {
-  if (typeof window === "undefined" || Notification.permission !== "granted") return;
-  const audio = new Audio("/notification.mp3");
-  audio.volume = 1;
-  void audio.play().catch(() => {
-    console.warn("Audio blocked by browser");
-  });
-}
 
 /**
  * FCM: Firebase `getToken` only (no manual PushManager). Foreground via `onMessage`; background via `public/firebase-messaging-sw.js` (generated at build).
@@ -21,15 +12,79 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
   const onMessageUnsubRef = useRef<(() => void) | undefined>(undefined);
   const tokenRegisteredForUserRef = useRef<string | null>(null);
 
-  const showForegroundNotification = useCallback((title: string, body: string, icon = "/favicon.svg") => {
-    if (!enabled) return;
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
-    try {
-      new Notification(title, { body, icon, silent: false, tag: "onlytwo-fcm" });
-    } catch {
-      /* */
-    }
-  }, [enabled]);
+  const showForegroundNotification = useCallback(
+    (title: string, body: string, icon = "/favicon.svg", tag?: string) => {
+      if (!enabled) return;
+      if (!("Notification" in window) || Notification.permission !== "granted") return;
+      const safeTitle = title.trim() || "Notification";
+      try {
+        new Notification(safeTitle, {
+          body,
+          icon,
+          silent: false,
+          tag: tag ?? String(Date.now()),
+        });
+      } catch {
+        /* */
+      }
+    },
+    [enabled]
+  );
+
+  const handleForegroundPayload = useCallback(
+    (payload: MessagePayload) => {
+      console.log("🔥 FOREGROUND PAYLOAD:", payload);
+      if (!enabled) return;
+      if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+      const pn = payload.notification || {};
+      const d = (payload.data || {}) as Record<string, string | undefined>;
+
+      const titleRaw =
+        (typeof pn.title === "string" ? pn.title : undefined) ??
+        (typeof d.title === "string" ? d.title : undefined) ??
+        "Notification";
+      const title = String(titleRaw || "Notification");
+
+      const body =
+        (typeof pn.body === "string" ? pn.body : undefined) ??
+        (typeof d.body === "string" ? d.body : undefined) ??
+        (typeof d.message === "string" ? d.message : undefined) ??
+        "";
+
+      const tag = String(payload.messageId ?? Date.now());
+
+      if (d.vibration === "on" && typeof navigator !== "undefined" && navigator.vibrate) {
+        try {
+          navigator.vibrate([200, 100, 200, 100, 400]);
+        } catch {
+          /* */
+        }
+      }
+
+      try {
+        new Notification(title, {
+          body,
+          icon: "/favicon.svg",
+          silent: false,
+          tag,
+        });
+      } catch {
+        /* */
+      }
+
+      try {
+        const audio = new Audio("/notification.mp3");
+        audio.volume = 1;
+        void audio.play().catch(() => {
+          console.warn("Audio blocked");
+        });
+      } catch {
+        console.warn("Audio error");
+      }
+    },
+    [enabled]
+  );
 
   const notify = useCallback(
     (title: string, body: string) => {
@@ -81,6 +136,11 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
           return;
         }
 
+        if (cancelled) return;
+
+        onMessageUnsubRef.current?.();
+        onMessageUnsubRef.current = onMessage(messaging, handleForegroundPayload);
+
         if (tokenRegisteredForUserRef.current !== userId) {
           const token = await getFcmTokenWithFirebase(messaging, registration, userId);
           if (cancelled) return;
@@ -90,6 +150,7 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
             return;
           }
 
+          console.log("FCM Token:", token);
           console.log("[FCM] Token registered (length:", token.length, ")");
 
           try {
@@ -111,28 +172,6 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
         } else {
           console.log("[FCM] Skipping duplicate getToken for this user");
         }
-
-        if (cancelled) return;
-
-        onMessageUnsubRef.current?.();
-        onMessageUnsubRef.current = onMessage(messaging, (payload) => {
-          console.log("[FCM] Foreground message:", payload);
-          const d = payload.data as { title?: string; body?: string; icon?: string } | undefined;
-          const pn = payload.notification;
-          const rawTitle = (typeof pn?.title === "string" ? pn.title : d?.title ?? "").trim();
-          const title = rawTitle || "Notification";
-          const body =
-            typeof pn?.body === "string"
-              ? pn.body
-              : typeof d?.body === "string"
-                ? d.body
-                : "";
-          const iconRaw = pn?.image ?? d?.icon;
-          const icon =
-            typeof iconRaw === "string" && iconRaw.length > 0 ? iconRaw : "/favicon.svg";
-          showForegroundNotification(title, body, icon);
-          playForegroundNotificationSound();
-        });
       } catch (err) {
         console.error("[FCM] setup error:", err);
       }
@@ -145,7 +184,7 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
       onMessageUnsubRef.current?.();
       onMessageUnsubRef.current = undefined;
     };
-  }, [enabled, userId, showForegroundNotification]);
+  }, [enabled, userId, handleForegroundPayload]);
 
   useEffect(() => {
     if (!enabled) {

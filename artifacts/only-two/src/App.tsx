@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useSession } from "@/hooks/useSession";
 import { useInactivityLogout } from "@/hooks/useInactivityLogout";
 import EntryPage from "@/pages/EntryPage";
@@ -6,6 +7,13 @@ import ChatPage from "@/pages/ChatPage";
 export default function App() {
   const { state, joinRoom, leaveRoom, codeError, isRecoveringSession } = useSession();
   useInactivityLogout(state.status === "active");
+
+  useEffect(() => {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission !== "granted") {
+      void Notification.requestPermission();
+    }
+  }, []);
 
   const handleJoin = async (payload: { role: "shelly" | "arshad"; name: string; roomCode: string }) => {
     await joinRoom(payload);
