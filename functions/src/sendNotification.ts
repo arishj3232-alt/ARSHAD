@@ -13,8 +13,12 @@ export async function sendCallNotification(
   extra: Record<string, string> = {}
 ): Promise<void> {
   const userDoc = await admin.firestore().collection("users").doc(userId).get();
-  const token = userDoc.data()?.fcmToken as string | undefined;
+  const data = userDoc.data();
+  const token = data?.fcmToken as string | undefined;
   if (!token) return;
+
+  const vibrOn = data?.notificationVibration === true;
+  const vibration = vibrOn ? "on" : "off";
 
   const callId = extra.callId ?? "";
   const callerId = extra.callerId ?? "";
@@ -30,6 +34,7 @@ export async function sendCallNotification(
     roomId,
     callType,
     click_action: "OPEN_CALL",
+    vibration,
   };
 
   const webpush: admin.messaging.WebpushConfig = {
@@ -61,8 +66,12 @@ export async function sendMissedCallNotification(
   extra: Record<string, string> = {}
 ): Promise<void> {
   const userDoc = await admin.firestore().collection("users").doc(userId).get();
-  const token = userDoc.data()?.fcmToken as string | undefined;
+  const udata = userDoc.data();
+  const token = udata?.fcmToken as string | undefined;
   if (!token) return;
+
+  const vibrOn = udata?.notificationVibration === true;
+  const vibration = vibrOn ? "on" : "off";
 
   const avatar = extra.callerAvatar ?? "";
   const useAvatarIcon = avatar.startsWith("http");
@@ -70,6 +79,7 @@ export async function sendMissedCallNotification(
   const fcmData: Record<string, string> = {
     ...extra,
     type: "missed_call",
+    vibration,
   };
 
   const webpushNotification: admin.messaging.WebpushNotification = {

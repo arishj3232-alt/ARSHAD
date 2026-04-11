@@ -3,6 +3,16 @@ import { onMessage, isSupported } from "firebase/messaging";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, getFirebaseMessaging } from "@/lib/firebase";
 import { getFcmTokenWithFirebase } from "@/lib/fcmInit";
+import { getVibrationPreference } from "@/lib/vibrationPreference";
+
+function playForegroundNotificationSound(): void {
+  if (typeof window === "undefined" || Notification.permission !== "granted") return;
+  const audio = new Audio("/notification.mp3");
+  audio.volume = 1;
+  void audio.play().catch(() => {
+    console.warn("Audio blocked by browser");
+  });
+}
 
 /**
  * FCM: Firebase `getToken` only (no manual PushManager). Foreground via `onMessage`; background via `public/firebase-messaging-sw.js` (generated at build).
@@ -85,7 +95,12 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
           try {
             await setDoc(
               doc(db, "users", userId),
-              { fcmToken: token, fcmTokenUpdatedAt: serverTimestamp() },
+              {
+                fcmToken: token,
+                fcmTokenUpdatedAt: serverTimestamp(),
+                notificationVibration: getVibrationPreference() === "on",
+                notificationVibrationUpdatedAt: serverTimestamp(),
+              },
               { merge: true }
             );
           } catch (persistErr) {
@@ -102,17 +117,21 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
         onMessageUnsubRef.current?.();
         onMessageUnsubRef.current = onMessage(messaging, (payload) => {
           console.log("[FCM] Foreground message:", payload);
-          const n = payload.notification;
-          if (n?.title) {
-            const icon =
-              typeof n.icon === "string" && n.icon.length > 0 ? n.icon : "/favicon.svg";
-            showForegroundNotification(n.title, n.body ?? "", icon);
-            return;
-          }
-          const d = payload.data as Record<string, string> | undefined;
-          if (d?.title || d?.body) {
-            showForegroundNotification(d.title ?? "Message", d.body ?? "", "/favicon.svg");
-          }
+          const d = payload.data as { title?: string; body?: string; icon?: string } | undefined;
+          const pn = payload.notification;
+          const rawTitle = (typeof pn?.title === "string" ? pn.title : d?.title ?? "").trim();
+          const title = rawTitle || "Notification";
+          const body =
+            typeof pn?.body === "string"
+              ? pn.body
+              : typeof d?.body === "string"
+                ? d.body
+                : "";
+          const iconRaw = pn?.image ?? d?.icon;
+          const icon =
+            typeof iconRaw === "string" && iconRaw.length > 0 ? iconRaw : "/favicon.svg";
+          showForegroundNotification(title, body, icon);
+          playForegroundNotificationSound();
         });
       } catch (err) {
         console.error("[FCM] setup error:", err);

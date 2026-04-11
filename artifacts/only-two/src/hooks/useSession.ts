@@ -10,6 +10,11 @@ import {
 } from "firebase/firestore";
 import { ref, set, onDisconnect, onValue, get, serverTimestamp, remove, runTransaction, update as rtdbUpdate } from "firebase/database";
 import { db, rtdb } from "@/lib/firebase";
+import {
+  parsePersistedSession,
+  writePersistedSession,
+  clearPersistedSession,
+} from "@/lib/persistedSession";
 
 const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
 const MAX_OTHER_USERS = 1;          // block a 3rd user (room is for 2)
@@ -129,6 +134,7 @@ export function useSession() {
       otherId: null,
       roomCode,
     });
+    writePersistedSession(roomCode, role, userId);
   }, []);
 
   // Clean up on component unmount (e.g. hot reload, app teardown)
@@ -158,14 +164,41 @@ export function useSession() {
           new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), ms)),
         ]);
 
-      const storedUserId = sessionStorage.getItem("onlytwo-user-id");
-      const storedRoleRaw = sessionStorage.getItem("onlytwo-role");
-      const storedRoom = sessionStorage.getItem("onlytwo-room");
+      let storedUserId = sessionStorage.getItem("onlytwo-user-id");
+      let storedRoleRaw = sessionStorage.getItem("onlytwo-role");
+      let storedRoom = sessionStorage.getItem("onlytwo-room");
+
+      const persisted = parsePersistedSession(localStorage.getItem("session"));
+      if (persisted) {
+        if (!storedUserId) {
+          sessionStorage.setItem("onlytwo-user-id", persisted.userId);
+          sessionStorage.setItem("onlytwo-role", persisted.role);
+          sessionStorage.setItem("onlytwo-room", persisted.roomCode);
+          sessionStorage.setItem(
+            "onlytwo-user-name",
+            persisted.role === "shelly" ? "Shelly" : "Arshad"
+          );
+          storedUserId = persisted.userId;
+          storedRoleRaw = persisted.role;
+          storedRoom = persisted.roomCode;
+        } else if (
+          storedUserId !== persisted.userId ||
+          storedRoom !== persisted.roomCode ||
+          storedRoleRaw !== persisted.role
+        ) {
+          clearPersistedSession();
+          sessionStorage.clear();
+          if (!cancelled) setIsRecoveringSession(false);
+          return;
+        }
+      }
+
       if (!storedUserId || !storedRoleRaw || !storedRoom) {
         if (!cancelled) setIsRecoveringSession(false);
         return;
       }
       if (storedRoleRaw !== "shelly" && storedRoleRaw !== "arshad") {
+        clearPersistedSession();
         sessionStorage.clear();
         if (!cancelled) setIsRecoveringSession(false);
         return;
@@ -175,6 +208,7 @@ export function useSession() {
         const roleRef = ref(rtdb, `rooms/${storedRoom}/roles/${storedRole}`);
         const snapOrTimeout = await withTimeout(get(roleRef), 3000);
         if (snapOrTimeout === "timeout") {
+          clearPersistedSession();
           sessionStorage.clear();
           if (!cancelled) setIsRecoveringSession(false);
           return;
@@ -183,6 +217,7 @@ export function useSession() {
         const val = snap.val() as { userId?: string; userName?: string } | string | null;
         const ownerId = typeof val === "string" ? val : val?.userId;
         if (ownerId !== storedUserId) {
+          clearPersistedSession();
           sessionStorage.clear();
           if (!cancelled) setIsRecoveringSession(false);
           return;
@@ -195,6 +230,7 @@ export function useSession() {
           setIsRecoveringSession(false);
         }
       } catch {
+        clearPersistedSession();
         sessionStorage.clear();
         if (!cancelled) setIsRecoveringSession(false);
       }
@@ -260,6 +296,8 @@ export function useSession() {
       }).length;
 
       if (activeOtherCount > MAX_OTHER_USERS) {
+        clearPersistedSession();
+        sessionStorage.clear();
         setState({ status: "blocked" });
         return;
       }
@@ -270,11 +308,15 @@ export function useSession() {
       const rolesData = (rolesSnap.val() ?? {}) as Record<string, unknown>;
       if (Object.keys(rolesData).length > 2) {
         setCodeError("Room roles are corrupted. Please try again.");
+        clearPersistedSession();
+        sessionStorage.clear();
         setState({ status: "blocked" });
         return;
       }
       if (Object.keys(rolesData).length >= 2 && !rolesData[selectedRole]) {
         setCodeError("Room is full (both roles already in use).");
+        clearPersistedSession();
+        sessionStorage.clear();
         setState({ status: "blocked" });
         return;
       }
@@ -286,6 +328,8 @@ export function useSession() {
       });
       if (!txResult.committed) {
         setCodeError("Role already taken in this room");
+        clearPersistedSession();
+        sessionStorage.clear();
         setState({ status: "blocked" });
         return;
       }
@@ -297,6 +341,8 @@ export function useSession() {
       );
       armOnlineLifecycle(normalizedRoomCode, userId, resolvedName, selectedRole);
     } catch {
+      clearPersistedSession();
+      sessionStorage.clear();
       setState({ status: "idle" });
       setCodeError("Connection failed. Please try again.");
     }
@@ -307,6 +353,7 @@ export function useSession() {
     const roomCode = activeRoomCodeRef.current ?? (state.status === "active" ? state.roomCode : sessionStorage.getItem("onlytwo-room"));
     const role = activeRoleRef.current ?? sessionStorage.getItem("onlytwo-role");
     if (!userId || !roomCode || !role) {
+      clearPersistedSession();
       sessionStorage.clear();
       setState({ status: "idle" });
       return;
@@ -333,6 +380,7 @@ export function useSession() {
     await rtdbUpdate(ref(rtdb), updates).catch(() => {});
     await deleteDoc(doc(db, "rooms", roomCode, "presence", userId)).catch(() => {});
 
+    clearPersistedSession();
     sessionStorage.clear();
     activeUserIdRef.current = null;
     activeRoomCodeRef.current = null;

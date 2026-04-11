@@ -113,6 +113,8 @@ export function useWebRTC(
   const [isMinimized, setIsMinimized] = useState(false);
   const [mediaError, setMediaError] = useState<{ type: MediaErrorType; message: string } | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [localAttachEpoch, setLocalAttachEpoch] = useState(0);
+  const [remoteAttachEpoch, setRemoteAttachEpoch] = useState(0);
   const callStateRef = useRef<CallStatus>("idle");
 
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -334,6 +336,34 @@ export function useWebRTC(
   useEffect(() => () => cleanupRef.current(), []);
 
   useEffect(() => {
+    if (callType !== "video") return;
+    if (callStatus === "idle" || callStatus === "ended") return;
+    const stream = localStreamRef.current;
+    const el = localVideoRef.current;
+    if (!stream || !el) return;
+    el.srcObject = stream;
+    el.muted = true;
+    void el.play().catch(() => {});
+    const vt = stream.getVideoTracks()[0];
+    console.log("[WEBRTC] effect: local video element", {
+      trackCount: stream.getTracks().length,
+      videoEnabled: vt?.enabled,
+      readyState: vt?.readyState,
+    });
+  }, [callStatus, callType, localAttachEpoch]);
+
+  useEffect(() => {
+    if (callType !== "video") return;
+    const stream = remoteStreamRef.current;
+    const el = remoteVideoRef.current;
+    if (!stream || !el) return;
+    el.srcObject = stream;
+    el.playsInline = true;
+    void el.play().catch(() => {});
+    console.log("[WEBRTC] effect: remote video element", { trackCount: stream.getTracks().length });
+  }, [callType, callStatus, remoteAttachEpoch]);
+
+  useEffect(() => {
     const onOnline = () => {
       console.log("[NETWORK] Back online");
       if (!connectedRef.current && callStateRef.current !== "ended" && callStateRef.current !== "idle") {
@@ -374,13 +404,28 @@ export function useWebRTC(
 
   const getMedia = useCallback(async (type: CallType): Promise<MediaStream | null> => {
     setMediaError(null);
+    if (localStreamRef.current) {
+      console.log("[WEBRTC] stopping previous local stream (prevent duplicate)");
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+    }
     try {
+      if (typeof navigator !== "undefined" && navigator.permissions?.query) {
+        try {
+          const mic = await navigator.permissions.query({ name: "microphone" as PermissionName });
+          console.log("[WEBRTC] microphone permission:", mic.state);
+          if (type === "video") {
+            const cam = await navigator.permissions.query({ name: "camera" as PermissionName });
+            console.log("[WEBRTC] camera permission:", cam.state);
+          }
+        } catch {
+          /* not all browsers support query for camera/mic */
+        }
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        video:
-          type === "video"
-            ? { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
-            : false,
+        audio: true,
+        video: type === "video",
       });
       if (!stream || stream.getTracks().length === 0) {
         throw new Error("Media stream not available");
@@ -391,13 +436,27 @@ export function useWebRTC(
       stream.getAudioTracks().forEach((track) => {
         track.enabled = true;
       });
-      if (stream.getAudioTracks().length === 0) {
-        console.warn("[MEDIA] No audio track found");
+      const vts = stream.getVideoTracks();
+      const ats = stream.getAudioTracks();
+      console.log("[WEBRTC] getUserMedia OK", {
+        trackCount: stream.getTracks().length,
+        audioTracks: ats.length,
+        videoTracks: vts.length,
+        videoEnabled: vts[0]?.enabled,
+        videoReadyState: vts[0]?.readyState,
+      });
+      if (ats.length === 0) {
+        console.warn("[WEBRTC] No audio track");
+      }
+      if (type === "video" && vts.length === 0) {
+        console.warn("[WEBRTC] No video track — check camera / permission");
       }
       localStreamRef.current = stream;
+      setLocalAttachEpoch((e) => e + 1);
       if (localVideoRef.current && type === "video") {
         localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play().catch(() => {});
+        localVideoRef.current.muted = true;
+        void localVideoRef.current.play().catch(() => {});
       }
       return stream;
     } catch (err) {
@@ -493,12 +552,14 @@ export function useWebRTC(
       });
 
       console.log(remoteStream.getTracks());
+      setRemoteAttachEpoch((e) => e + 1);
 
       const attachStream = () => {
         if (!remoteVideoRef.current) return;
         console.log("[ATTACH STREAM]");
         const el = remoteVideoRef.current;
         el.srcObject = remoteStream;
+        el.playsInline = true;
         const tryPlayVideo = () => {
           void el.play().catch(() => {
             window.setTimeout(() => void el.play().catch(() => {}), 300);

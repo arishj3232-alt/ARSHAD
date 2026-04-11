@@ -19,10 +19,12 @@ import {
   Plus,
   Paperclip,
   Check,
+  MoreVertical,
   Ghost,
   Eye,
   EyeOff,
   WifiOff,
+  Vibrate,
 } from "lucide-react";
 import { ref, set, onValue, onDisconnect, serverTimestamp } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
@@ -36,6 +38,7 @@ import { useRateLimit } from "@/hooks/useRateLimit";
 import { useCursorPresence } from "@/hooks/useCursorPresence";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useVibrationPreference } from "@/hooks/useVibrationPreference";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserStatus, useOtherUserStatus } from "@/hooks/useUserStatus";
 import ChatMessage from "@/components/ChatMessage";
@@ -94,6 +97,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [roleCount, setRoleCount] = useState(0);
   const [missedCallBanner, setMissedCallBanner] = useState(false);
+  const [dpPreviewUrl, setDpPreviewUrl] = useState<string | null>(null);
+  const [myRole, setMyRole] = useState<"shelly" | "arshad" | null>(null);
 
   // --- Command-driven states ---
   const [ghostMode, setGhostMode] = useState(false);
@@ -114,6 +119,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const { settings, updateSetting } = useAdmin();
   const readReceiptsOn = settings.readReceiptsEnabled !== false;
   const { notify } = useNotifications(settings.notificationsEnabled, userId);
+  const { vibration, toggleVibration } = useVibrationPreference(userId);
   const presence = usePresence(userId, roomCode);
   const { isConnected } = useNetworkStatus();
   const { check: checkMsgRateLimit } = useRateLimit(5, 10_000); // max 5 messages per 10 s
@@ -194,6 +200,17 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     });
     return () => unsub();
   }, [roomCode]);
+
+  useEffect(() => {
+    try {
+      const r = sessionStorage.getItem("onlytwo-role");
+      if (r === "shelly" || r === "arshad") setMyRole(r);
+    } catch {
+      /* */
+    }
+  }, []);
+
+  const waitingForName = myRole === "arshad" ? "Shelly" : myRole === "shelly" ? "Arshad" : "the other user";
 
   useEffect(() => {
     // Best-effort only. Real cleanup is guaranteed via RTDB onDisconnect handlers.
@@ -730,13 +747,20 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         <div className="flex items-center gap-3 px-4 py-3 border-b border-white/5 bg-[#0c0c16]/80 backdrop-blur-xl flex-shrink-0">
           {/* Other user's avatar + presence dot */}
           <div className="relative flex-shrink-0">
-            <div className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20">
+            <button
+              type="button"
+              className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-lg shadow-pink-500/20 ring-0 focus:outline-none focus:ring-2 focus:ring-pink-500/50"
+              onClick={() => {
+                if (otherDpUrl) setDpPreviewUrl(otherDpUrl);
+              }}
+              title={otherDpUrl ? "View photo" : otherName}
+            >
               {otherDpUrl ? (
                 <img src={otherDpUrl} alt={otherName} className="w-full h-full object-cover" />
               ) : (
                 <span className="text-white font-bold text-sm select-none">{otherName[0]?.toUpperCase() ?? "?"}</span>
               )}
-            </div>
+            </button>
             <div className={cn("absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0c16]", statusDot.color)} title={statusDot.label} />
           </div>
 
@@ -750,7 +774,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
               ) : otherStatus === "viewingMedia" ? (
                 <span className="text-yellow-400/70">viewing media…</span>
               ) : roleCount < 2 ? (
-                "Waiting for other user..."
+                `Waiting for ${waitingForName}...`
               ) : roleCount >= 2 ? (
                 "Online"
               ) : settings.lastSeenEnabled ? (
@@ -763,6 +787,25 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             <div title="Read receipts off" className="text-white/20 flex-shrink-0">
               <EyeOff className="w-4 h-4" />
             </div>
+          )}
+
+          {settings.notificationsEnabled && (
+            <button
+              type="button"
+              onClick={toggleVibration}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium text-white/45 hover:text-white/75 hover:bg-white/5 border border-white/10 flex-shrink-0 max-w-[9rem] sm:max-w-none"
+              title={
+                vibration === "on"
+                  ? "Vibration on (server must send vibration:on in push data)"
+                  : "Vibration off"
+              }
+              aria-pressed={vibration === "on"}
+            >
+              <Vibrate className="w-3.5 h-3.5 flex-shrink-0 opacity-80" />
+              <span className="truncate">
+                {vibration === "on" ? "Vibration ON" : "Vibration OFF"}
+              </span>
+            </button>
           )}
 
           <div className="flex items-center gap-0.5">
@@ -843,6 +886,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                         viewOnceTimerMs={viewOnceTimerMs}
                         imageDownloadProtection={settings.imageDownloadProtection}
                         onCallAgain={safeStartCall}
+                        onDpPreview={(url) => setDpPreviewUrl(url)}
                       />
                     </div>
                   ))}
@@ -940,6 +984,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                 {showDpMenu && (
                   <div className="absolute bottom-full mb-2 left-0 bg-[#1a1a2e] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-40 w-52">
                     <button
+                      type="button"
                       onClick={() => { dpInputRef.current?.click(); setShowDpMenu(false); }}
                       className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm text-left"
                     >
@@ -947,6 +992,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                     </button>
                     {profile.dpUrl && (
                       <button
+                        type="button"
                         onClick={() => { deleteDp(); setShowDpMenu(false); }}
                         className="flex items-center gap-3 w-full px-4 py-3 hover:bg-rose-500/10 text-rose-400/70 hover:text-rose-400 transition text-sm text-left"
                       >
@@ -954,6 +1000,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                       </button>
                     )}
                     <button
+                      type="button"
                       onClick={() => setShowDpMenu(false)}
                       className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/30 hover:text-white/60 transition text-sm text-left border-t border-white/5"
                     >
@@ -962,18 +1009,34 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                   </div>
                 )}
 
-                {/* Avatar button */}
-                <button
-                  onClick={() => setShowDpMenu((p) => !p)}
-                  title="Your profile picture"
-                  className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-md relative"
-                >
-                  {profile.dpUrl ? (
-                    <img src={profile.dpUrl} alt={userName} className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-white font-bold text-xs select-none">{userName[0]?.toUpperCase() ?? "?"}</span>
-                  )}
-                </button>
+                <div className="relative w-8 h-8">
+                  <button
+                    type="button"
+                    title="Your profile picture"
+                    className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-md relative"
+                    onClick={() => {
+                      if (profile.dpUrl) setDpPreviewUrl(profile.dpUrl);
+                      else setShowDpMenu(true);
+                    }}
+                  >
+                    {profile.dpUrl ? (
+                      <img src={profile.dpUrl} alt={userName} className="w-full h-full object-cover pointer-events-none" />
+                    ) : (
+                      <span className="text-white font-bold text-xs select-none">{userName[0]?.toUpperCase() ?? "?"}</span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Profile options"
+                    className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-[#14141f] border border-white/15 flex items-center justify-center text-white/80 hover:bg-white/10 z-10"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowDpMenu((p) => !p);
+                    }}
+                  >
+                    <MoreVertical className="w-3 h-3" />
+                  </button>
+                </div>
 
                 {/* Upload progress ring */}
                 {dpUploading && (
@@ -1093,6 +1156,29 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         playsInline
         style={{ display: "none" }}
       />
+
+      {dpPreviewUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4"
+          onClick={() => setDpPreviewUrl(null)}
+          role="presentation"
+        >
+          <button
+            type="button"
+            className="absolute top-4 right-4 z-[101] rounded-full bg-white/10 hover:bg-white/20 text-white p-2"
+            aria-label="Close"
+            onClick={() => setDpPreviewUrl(null)}
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img
+            src={dpPreviewUrl}
+            alt=""
+            className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       <CallOverlay
         callStatus={callStatus} callType={callType} isMuted={isMuted} isCameraOff={isCameraOff}

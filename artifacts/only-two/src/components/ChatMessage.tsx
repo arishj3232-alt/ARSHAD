@@ -45,6 +45,7 @@ type Props = {
   viewOnceTimerMs?: number;
   imageDownloadProtection?: boolean;
   onCallAgain?: (type: "audio" | "video") => void;
+  onDpPreview?: (url: string) => void;
 };
 
 const WAVEFORM = [4, 7, 12, 18, 22, 28, 24, 16, 10, 20, 30, 26, 14, 8, 22, 18, 12, 6, 16, 24];
@@ -525,6 +526,7 @@ function ChatMessage({
   viewOnceTimerMs = 15_000,
   imageDownloadProtection = true,
   onCallAgain,
+  onDpPreview,
 }: Props) {
   void _isOwn;
   const isOwn = message.senderId === currentUserId;
@@ -700,7 +702,16 @@ function ChatMessage({
       {!isOwn && (
         <div className="flex-shrink-0 mr-1.5 mb-1 self-end">
           {dpUrl ? (
-            <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10" />
+            <button
+              type="button"
+              className="p-0 border-0 bg-transparent cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-pink-500/50 rounded-full"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDpPreview?.(dpUrl);
+              }}
+            >
+              <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10 pointer-events-none" />
+            </button>
           ) : (
             <div className="w-6 h-6 rounded-full bg-gray-700 ring-1 ring-white/10" />
           )}

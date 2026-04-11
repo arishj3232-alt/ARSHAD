@@ -70,60 +70,123 @@ function callUrl(queryString) {
 }
 
 messaging.onBackgroundMessage(function (payload) {
-  console.log("[SW] Background message", payload);
-  var n = payload.notification || {};
+  console.log(payload);
+  var pn = payload.notification || {};
   var d = payload.data || {};
-  var title = n.title || d.title || "Notification";
-  var bodyText = n.body || d.body || "";
-  var icon = (typeof n.icon === "string" && n.icon) ? n.icon : "/favicon.svg";
+  var vibrateEnabled = d.vibration === "on";
+  var vibratePattern = vibrateEnabled ? [200, 100, 200, 100, 400] : undefined;
 
   if (d.type === "missed_call") {
-    title = n.title || d.title || "Missed Call";
-    bodyText = n.body || d.body || "You missed a call";
+    var titleMc = pn.title || d.title || "Missed Call";
+    var bodyMc = pn.body ?? d.body ?? "You missed a call";
+    var iconMc =
+      pn.icon ||
+      pn.image ||
+      d.icon ||
+      d.image ||
+      "/favicon.svg";
     var missedOpts = {
-      body: bodyText,
-      icon: "/favicon.svg",
+      body: bodyMc,
+      icon: iconMc,
       data: d,
       silent: false,
-      vibrate: [200, 100, 200],
     };
+    if (vibratePattern) missedOpts.vibrate = vibratePattern;
     if (d.callerAvatar && d.callerAvatar.indexOf("http") === 0) {
       missedOpts.icon = d.callerAvatar;
       missedOpts.image = d.callerAvatar;
     }
-    self.registration.showNotification(title, missedOpts);
+    self.registration.showNotification(titleMc, missedOpts);
     return;
   }
 
   if (d.type === "call") {
-    title = n.title || d.title || "Incoming Call";
-    bodyText = n.body || d.body || "Tap to answer";
-    self.registration.showNotification(title, {
-      body: bodyText,
-      icon: "/favicon.svg",
+    var titleCall = pn.title || d.title || "Incoming Call";
+    var bodyCall = pn.body ?? d.body ?? "Tap to answer";
+    var iconCall =
+      pn.icon ||
+      pn.image ||
+      d.icon ||
+      d.image ||
+      "/favicon.svg";
+    var callOpts = {
+      body: bodyCall,
+      icon: iconCall,
       data: d,
+      requireInteraction: true,
       actions: [
         { action: "accept", title: "Accept" },
         { action: "reject", title: "Reject" },
       ],
-    });
+    };
+    if (vibratePattern) callOpts.vibrate = vibratePattern;
+    self.registration.showNotification(titleCall, callOpts);
     return;
   }
 
-  self.registration.showNotification(title, {
-    body: bodyText || "You have a new message",
+  var title = pn.title || d.title || "Notification";
+  var body = pn.body ?? d.body ?? "";
+  var icon =
+    pn.icon ||
+    pn.image ||
+    d.icon ||
+    d.image ||
+    "/favicon.svg";
+  var genOpts = {
+    body: body,
     icon: icon,
     data: d,
-  });
+  };
+  if (vibratePattern) genOpts.vibrate = vibratePattern;
+  self.registration.showNotification(title, genOpts);
 });
 
 self.addEventListener("notificationclick", function (event) {
-  event.notification.close();
+  var action = event.action || "";
   var raw = event.notification.data || {};
   var data = {};
   Object.keys(raw).forEach(function (k) {
     data[k] = raw[k];
   });
+  event.notification.close();
+
+  if (data.type === "call" && data.callId) {
+    if (action === "accept") {
+      var qa = new URLSearchParams();
+      qa.set("callId", data.callId);
+      if (data.roomId) qa.set("roomId", data.roomId);
+      qa.set("autoAccept", "true");
+      var acceptUrl = self.location.origin + appPath("/call") + "?" + qa.toString();
+      event.waitUntil(self.clients.openWindow(acceptUrl));
+      return;
+    }
+    if (action === "reject") {
+      event.waitUntil(
+        self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (clientsArr) {
+          var i;
+          for (i = 0; i < clientsArr.length; i++) {
+            var cw = clientsArr[i];
+            if (cw.url.indexOf(self.location.origin) !== 0) continue;
+            if (typeof cw.focus !== "function" || typeof cw.postMessage !== "function") continue;
+            return Promise.resolve(cw.focus()).then(function () {
+              cw.postMessage({
+                type: "OPEN_CALL",
+                callId: data.callId || "",
+                roomId: data.roomId || "",
+                action: "reject",
+              });
+            });
+          }
+          var qr = new URLSearchParams();
+          qr.set("callId", data.callId);
+          if (data.roomId) qr.set("roomId", data.roomId);
+          qr.set("reject", "true");
+          return self.clients.openWindow(self.location.origin + appPath("/call") + "?" + qr.toString());
+        })
+      );
+      return;
+    }
+  }
 
   var url = self.location.origin + appPath("/");
   if (data.type === "missed_call") {
@@ -137,15 +200,10 @@ self.addEventListener("notificationclick", function (event) {
       url = self.location.origin + appPath("/");
     }
   } else if (data.type === "call" && data.callId) {
-    var q = new URLSearchParams();
-    q.set("callId", data.callId);
-    if (data.roomId) q.set("roomId", data.roomId);
-    if (event.action === "accept") {
-      q.set("autoAccept", "true");
-    } else if (event.action === "reject") {
-      q.set("reject", "true");
-    }
-    url = callUrl(q.toString());
+    var qd = new URLSearchParams();
+    qd.set("callId", data.callId);
+    if (data.roomId) qd.set("roomId", data.roomId);
+    url = callUrl(qd.toString());
   }
 
   event.waitUntil(
@@ -155,29 +213,27 @@ self.addEventListener("notificationclick", function (event) {
 
       if (callerId && data.type === "missed_call") {
         for (i = 0; i < clientsArr.length; i++) {
-          var cw = clientsArr[i];
-          if (cw.url.indexOf(self.location.origin) !== 0) continue;
-          if (cw.url.indexOf("/chat") === -1) continue;
-          if (typeof cw.focus !== "function" || typeof cw.postMessage !== "function") continue;
-          return Promise.resolve(cw.focus()).then(function () {
-            cw.postMessage({ type: "OPEN_CHAT", user: callerId });
+          var cwM = clientsArr[i];
+          if (cwM.url.indexOf(self.location.origin) !== 0) continue;
+          if (typeof cwM.focus !== "function" || typeof cwM.postMessage !== "function") continue;
+          return Promise.resolve(cwM.focus()).then(function () {
+            cwM.postMessage({ type: "OPEN_CHAT", user: callerId });
           });
         }
       }
 
-      if (callerId && data.type === "call" && data.callId) {
+      if (data.type === "call" && data.callId) {
         for (i = 0; i < clientsArr.length; i++) {
-          var cw2 = clientsArr[i];
-          if (cw2.url.indexOf(self.location.origin) !== 0) continue;
-          if (cw2.url.indexOf("/chat") === -1) continue;
-          if (typeof cw2.focus !== "function" || typeof cw2.postMessage !== "function") continue;
-          return Promise.resolve(cw2.focus()).then(function () {
-            cw2.postMessage({
+          var cwC = clientsArr[i];
+          if (cwC.url.indexOf(self.location.origin) !== 0) continue;
+          if (typeof cwC.focus !== "function" || typeof cwC.postMessage !== "function") continue;
+          return Promise.resolve(cwC.focus()).then(function () {
+            cwC.postMessage({
               type: "OPEN_CALL",
               user: callerId,
               callId: data.callId || "",
               roomId: data.roomId || "",
-              action: event.action || "",
+              action: action || "",
             });
           });
         }
