@@ -6,6 +6,7 @@ import {
   BootErrorScreen,
 } from "./envGate";
 console.log("ENV CHECK:", import.meta.env);
+console.log("BUILD VERSION:", "v2-new");
 const rootEl = document.getElementById("root")!;
 const root = createRoot(rootEl);
 const missing = getMissingFirebaseEnvKeys();
