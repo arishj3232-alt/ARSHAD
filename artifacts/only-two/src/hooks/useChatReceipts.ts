@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import type { Message } from "@/hooks/useMessages";
 
 type Options = {
-  readReceiptsEnabled: boolean;
+  /** Room-level feature: when false, never mark messages as read. */
+  roomReadReceiptsEnabled: boolean;
+  /**
+   * Per-user: when true, this user does not mark others' messages as read
+   * (their read signals are hidden — others never get blue ticks from this reader).
+   */
+  hideReadSignalsFromReader: boolean;
   /** Admin stealth: do not mark others' messages as read (no blue ticks for them). */
   adminStealthRead: boolean;
   ghostMode: boolean;
@@ -16,7 +22,7 @@ export function useChatReceipts(
   currentUserId: string | null,
   markDelivered: (id: string) => void | Promise<void>,
   markSeen: (id: string) => void | Promise<void>,
-  { readReceiptsEnabled, adminStealthRead, ghostMode }: Options
+  { roomReadReceiptsEnabled, hideReadSignalsFromReader, adminStealthRead, ghostMode }: Options
 ) {
   const deliveredPendingRef = useRef<Set<string>>(new Set());
   const [tabVisible, setTabVisible] = useState(
@@ -46,7 +52,13 @@ export function useChatReceipts(
 
   useEffect(() => {
     if (!currentUserId) return;
-    if (!readReceiptsEnabled || adminStealthRead || ghostMode) return;
+    if (
+      !roomReadReceiptsEnabled ||
+      hideReadSignalsFromReader ||
+      adminStealthRead ||
+      ghostMode
+    )
+      return;
     if (!tabVisible) return;
 
     const unseen = messages.filter(
@@ -59,5 +71,14 @@ export function useChatReceipts(
         m.receiptStatus !== "read"
     );
     unseen.forEach((m) => void markSeen(m.id));
-  }, [messages, currentUserId, markSeen, readReceiptsEnabled, adminStealthRead, ghostMode, tabVisible]);
+  }, [
+    messages,
+    currentUserId,
+    markSeen,
+    roomReadReceiptsEnabled,
+    hideReadSignalsFromReader,
+    adminStealthRead,
+    ghostMode,
+    tabVisible,
+  ]);
 }

@@ -46,7 +46,7 @@ import { useCursorPresence } from "@/hooks/useCursorPresence";
 import { useAdmin } from "@/hooks/useAdmin";
 import { useChatReceipts } from "@/hooks/useChatReceipts";
 import { useNotifications } from "@/hooks/useNotifications";
-import { handleKeyword, normalize, resolveKeywordLists } from "@/lib/chatKeywords";
+import { handleKeywordNormalized, normalize, resolveKeywordLists } from "@/lib/chatKeywords";
 import { useVibrationPreference } from "@/hooks/useVibrationPreference";
 import { useProfile } from "@/hooks/useProfile";
 import { useUserStatus, useOtherUserStatus } from "@/hooks/useUserStatus";
@@ -151,10 +151,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const [showDpMenu, setShowDpMenu] = useState(false);
   const [viewOnceNext, setViewOnceNext] = useState(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
-  const [roleCount, setRoleCount] = useState(0);
   const [missedCallBanner, setMissedCallBanner] = useState(false);
   const [dpPreviewUrl, setDpPreviewUrl] = useState<string | null>(null);
-  const [myRole, setMyRole] = useState<"shelly" | "arshad" | null>(null);
   const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const optimisticPendingRef = useRef<{ tempId: string; docId: string } | null>(null);
 
@@ -176,7 +174,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const lastSoundAtRef = useRef(0);
 
   const { settings, updateSetting } = useAdmin();
-  const readReceiptsOn = settings.readReceiptsEnabled !== false;
 
   useEffect(() => {
     if (showAdmin) setAdminStealthRead(true);
@@ -206,11 +203,16 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
   otherNameForNotifRef.current = otherName;
 
-  const { profile, uploading: dpUploading, uploadDp, deleteDp, getDpUrl } = useProfile(userId);
+  const { profile, uploading: dpUploading, uploadDp, deleteDp, getDpUrl, updateReadReceiptsEnabled } =
+    useProfile(userId);
   const otherDpUrl = resolvedOtherId ? getDpUrl(resolvedOtherId) : null;
 
+  const roomReadReceiptsEnabled = settings.readReceiptsEnabled !== false;
+  const myReadReceiptsHide = profile.readReceiptsEnabled === true;
+  const readReceiptTicksShowRead = roomReadReceiptsEnabled && !myReadReceiptsHide;
+
   const { setStatus: setMyStatus } = useUserStatus(roomCode, userId);
-  const { otherStatus, otherRecordingKind } = useOtherUserStatus(roomCode, resolvedOtherId);
+  const { otherStatus, otherRecordingKind, otherTs } = useOtherUserStatus(roomCode, resolvedOtherId);
 
   // Force-logout listener
   useEffect(() => {
@@ -236,26 +238,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       return undefined;
     }
   }, [roomCode, userId, onForceLogout]);
-
-  useEffect(() => {
-    const rolesRef = ref(rtdb, `rooms/${roomCode}/roles`);
-    const unsub = onValue(rolesRef, (snap) => {
-      const data = (snap.val() ?? {}) as Record<string, unknown>;
-      setRoleCount(Object.keys(data).length);
-    });
-    return () => unsub();
-  }, [roomCode]);
-
-  useEffect(() => {
-    try {
-      const r = sessionStorage.getItem("onlytwo-role");
-      if (r === "shelly" || r === "arshad") setMyRole(r);
-    } catch {
-      /* */
-    }
-  }, []);
-
-  const waitingForName = myRole === "arshad" ? "Shelly" : myRole === "shelly" ? "Arshad" : "the other user";
 
   useEffect(() => {
     // Best-effort only. Real cleanup is guaranteed via RTDB onDisconnect handlers.
@@ -333,7 +315,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   } = useMessages(ROOM_ID, userId, viewOnceTimerMs);
 
   useChatReceipts(messages, userId, markDelivered, markSeen, {
-    readReceiptsEnabled: readReceiptsOn,
+    roomReadReceiptsEnabled,
+    hideReadSignalsFromReader: myReadReceiptsHide,
     adminStealthRead,
     ghostMode,
   });
@@ -359,7 +342,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const { isOtherTyping, setTyping } = useTypingIndicator(ROOM_ID, userId);
   const peerTypingLine =
     (isOtherTyping || !!otherUser?.typing) && settings.typingIndicatorEnabled && !ghostMode;
-  const headerPeerOnline = !!resolvedOtherId && !!otherUser?.online;
+  const headerPeerOnline = otherStatus === "online";
   const { uploading, progress, uploadMedia } = useMediaUpload();
   const { otherCursors } = useCursorPresence(roomCode, userId, userName);
   const mediaMessages = useMemo(
@@ -487,16 +470,17 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     (messageText: string) => {
       if (!messageText || !messageText.trim()) return false;
       const normalized = normalize(messageText);
+      if (!normalized) return false;
       if (lastKeywordDedupeRef.current === normalized) return true;
 
-      const result = handleKeyword(messageText, {
+      const result = handleKeywordNormalized(normalized, {
         settings,
         isAdmin: adminStealthRead,
         lists: keywordLists,
         setRevealMode: setShowDeleted,
         setGhostMode,
         setReadReceipt: (val) => {
-          void updateSetting("readReceiptsEnabled", val);
+          void updateReadReceiptsEnabled(val);
         },
         setShowAdmin,
       });
@@ -510,7 +494,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       }
       return true;
     },
-    [keywordLists, settings, adminStealthRead, updateSetting, setShowDeleted, setGhostMode, setShowAdmin]
+    [keywordLists, settings, adminStealthRead, updateReadReceiptsEnabled, setShowDeleted, setGhostMode, setShowAdmin]
   );
 
   /** Foreground-only chat alerts via Firestore (no FCM). */
@@ -1007,43 +991,20 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                 </span>
               ) : otherStatus === "viewingMedia" ? (
                 <span className="text-yellow-400/70 animate-pulse">viewing media…</span>
-              ) : roleCount < 2 ? (
-                `Waiting for ${waitingForName}...`
-              ) : headerPeerOnline ? (
+              ) : otherStatus === "online" ? (
                 "Online"
-              ) : settings.lastSeenEnabled && otherUser?.lastSeen ? (
-                `Last seen ${formatLastSeen(otherUser.lastSeen)}`
-              ) : roleCount >= 2 ? (
-                "Online"
+              ) : settings.lastSeenEnabled && otherTs > 0 ? (
+                `Last seen ${formatLastSeen(new Date(otherTs))}`
               ) : (
                 ""
               )}
             </p>
           </div>
 
-          {!readReceiptsOn && (
-            <div title="Read receipts off" className="text-white/20 flex-shrink-0">
+          {settings.allowReadReceiptToggle && profile.readReceiptsEnabled === true && (
+            <div title="Read receipts hidden (others won't see blue ticks)" className="text-white/20 flex-shrink-0">
               <EyeOff className="w-4 h-4" />
             </div>
-          )}
-
-          {settings.notificationsEnabled && (
-            <button
-              type="button"
-              onClick={toggleVibration}
-              className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium text-white/45 hover:text-white/75 hover:bg-white/5 border border-white/10 flex-shrink-0 max-w-[9rem] sm:max-w-none"
-              title={
-                vibration === "on"
-                  ? "Vibration on for new message alerts"
-                  : "Vibration off"
-              }
-              aria-pressed={vibration === "on"}
-            >
-              <Vibrate className="w-3.5 h-3.5 flex-shrink-0 opacity-80" />
-              <span className="truncate">
-                {vibration === "on" ? "Vibration ON" : "Vibration OFF"}
-              </span>
-            </button>
           )}
 
           <div className="flex items-center gap-0.5">
@@ -1132,7 +1093,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                           setProfileModal({ name: otherName, dpUrl: otherDpUrl, bio: null })
                         }
                         peerOnline={headerPeerOnline}
-                        readReceiptsEnabled={readReceiptsOn}
+                        readReceiptsEnabled={readReceiptTicksShowRead}
                         viewOnceEnabled={settings.viewOnceEnabled}
                         viewOnceTimerMs={viewOnceTimerMs}
                         imageDownloadProtection={settings.imageDownloadProtection}
@@ -1214,83 +1175,100 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             <VideoNoteRecorder onSend={handleVideoNoteSend} onCancel={() => setInputMode("text")} disabled={!settings.videoNoteEnabled} />
           ) : (
             <div className="flex items-end gap-2">
-              {/* YOUR profile picture — left of input, tap for context menu */}
-              <div className="relative flex-shrink-0 self-end pb-1">
-                {/* Hidden DP file input */}
-                <input
-                  ref={dpInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }}
-                />
+              {/* YOUR profile picture + vibration — left of input */}
+              <div className="flex items-end gap-1 flex-shrink-0 self-end pb-1">
+                <div className="relative">
+                  {/* Hidden DP file input */}
+                  <input
+                    ref={dpInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDp(f); e.target.value = ""; }}
+                  />
 
-                {/* Context menu backdrop */}
-                {showDpMenu && (
-                  <div className="fixed inset-0 z-30" onClick={() => setShowDpMenu(false)} />
-                )}
+                  {/* Context menu backdrop */}
+                  {showDpMenu && (
+                    <div className="fixed inset-0 z-30" onClick={() => setShowDpMenu(false)} />
+                  )}
 
-                {/* Context menu popup */}
-                {showDpMenu && (
-                  <div className="absolute bottom-full mb-2 left-0 bg-[#1a1a2e] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-40 w-52">
-                    <button
-                      type="button"
-                      onClick={() => { dpInputRef.current?.click(); setShowDpMenu(false); }}
-                      className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm text-left"
-                    >
-                      Change profile picture
-                    </button>
-                    {profile.dpUrl && (
+                  {/* Context menu popup */}
+                  {showDpMenu && (
+                    <div className="absolute bottom-full mb-2 left-0 bg-[#1a1a2e] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-40 w-52">
                       <button
                         type="button"
-                        onClick={() => { deleteDp(); setShowDpMenu(false); }}
-                        className="flex items-center gap-3 w-full px-4 py-3 hover:bg-rose-500/10 text-rose-400/70 hover:text-rose-400 transition text-sm text-left"
+                        onClick={() => { dpInputRef.current?.click(); setShowDpMenu(false); }}
+                        className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/70 hover:text-white transition text-sm text-left"
                       >
-                        Remove profile picture
+                        Change profile picture
                       </button>
-                    )}
+                      {profile.dpUrl && (
+                        <button
+                          type="button"
+                          onClick={() => { deleteDp(); setShowDpMenu(false); }}
+                          className="flex items-center gap-3 w-full px-4 py-3 hover:bg-rose-500/10 text-rose-400/70 hover:text-rose-400 transition text-sm text-left"
+                        >
+                          Remove profile picture
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowDpMenu(false)}
+                        className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/30 hover:text-white/60 transition text-sm text-left border-t border-white/5"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="relative w-8 h-8">
                     <button
                       type="button"
-                      onClick={() => setShowDpMenu(false)}
-                      className="flex items-center gap-3 w-full px-4 py-3 hover:bg-white/5 text-white/30 hover:text-white/60 transition text-sm text-left border-t border-white/5"
+                      title="Your profile picture"
+                      className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-md relative"
+                      onClick={() => {
+                        if (profile.dpUrl) setDpPreviewUrl(profile.dpUrl);
+                        else setShowDpMenu(true);
+                      }}
                     >
-                      Cancel
+                      {profile.dpUrl ? (
+                        <img src={profile.dpUrl} alt={userName} className="w-full h-full object-cover pointer-events-none" />
+                      ) : (
+                        <span className="text-white font-bold text-xs select-none">{userName[0]?.toUpperCase() ?? "?"}</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Profile options"
+                      className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-[#14141f] border border-white/15 flex items-center justify-center text-white/80 hover:bg-white/10 z-10"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowDpMenu((p) => !p);
+                      }}
+                    >
+                      <MoreVertical className="w-3 h-3" />
                     </button>
                   </div>
-                )}
 
-                <div className="relative w-8 h-8">
-                  <button
-                    type="button"
-                    title="Your profile picture"
-                    className="w-8 h-8 rounded-full overflow-hidden bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-md relative"
-                    onClick={() => {
-                      if (profile.dpUrl) setDpPreviewUrl(profile.dpUrl);
-                      else setShowDpMenu(true);
-                    }}
-                  >
-                    {profile.dpUrl ? (
-                      <img src={profile.dpUrl} alt={userName} className="w-full h-full object-cover pointer-events-none" />
-                    ) : (
-                      <span className="text-white font-bold text-xs select-none">{userName[0]?.toUpperCase() ?? "?"}</span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Profile options"
-                    className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-[#14141f] border border-white/15 flex items-center justify-center text-white/80 hover:bg-white/10 z-10"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowDpMenu((p) => !p);
-                    }}
-                  >
-                    <MoreVertical className="w-3 h-3" />
-                  </button>
+                  {dpUploading && (
+                    <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin pointer-events-none" />
+                  )}
                 </div>
 
-                {/* Upload progress ring */}
-                {dpUploading && (
-                  <div className="absolute inset-0 rounded-full border-2 border-pink-500 border-t-transparent animate-spin pointer-events-none" />
+                {settings.notificationsEnabled && (
+                  <button
+                    type="button"
+                    onClick={toggleVibration}
+                    className="p-1.5 rounded-lg text-white/45 hover:text-white/80 hover:bg-white/10 border border-white/10 flex-shrink-0 mb-0.5"
+                    title={
+                      vibration === "on"
+                        ? "Vibration on for new message alerts"
+                        : "Vibration off"
+                    }
+                    aria-pressed={vibration === "on"}
+                  >
+                    <Vibrate className={`w-4 h-4 ${vibration === "on" ? "text-pink-400/90" : "opacity-70"}`} />
+                  </button>
                 )}
               </div>
 
@@ -1358,7 +1336,10 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
               />
 
               <div className="flex items-center gap-1 flex-shrink-0">
-                {!editingMsg && (showDeleted || ghostMode || readReceiptsOn) && (
+                {!editingMsg &&
+                  (showDeleted ||
+                    ghostMode ||
+                    (settings.allowReadReceiptToggle && profile.readReceiptsEnabled !== true)) && (
                   <div className="flex items-center gap-2 mr-2 flex-wrap justify-end max-w-[min(11rem,42vw)]" aria-live="polite">
                     {showDeleted && (
                       <span
@@ -1378,9 +1359,9 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                         Ghost
                       </span>
                     )}
-                    {readReceiptsOn && (
+                    {settings.allowReadReceiptToggle && profile.readReceiptsEnabled !== true && (
                       <span
-                        title="Read receipts on"
+                        title="Read signals on — others see when you've read"
                         className="text-[10px] font-medium bg-sky-600/95 text-white px-2 py-0.5 rounded-md flex items-center gap-0.5 shrink-0"
                       >
                         <Check className="w-3 h-3" />

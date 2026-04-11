@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { ref, set, onValue } from "firebase/database";
+import { ref, set, onValue, update } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 const CLOUDINARY_CLOUD = "dwqgqkcac";
@@ -26,6 +26,11 @@ async function uploadToCloudinary(file: File): Promise<string> {
 export type UserProfile = {
   dpUrl: string | null;
   dpHash: string | null;
+  /**
+   * Per-user read privacy: when true, this user does not send read receipts
+   * (others never see blue ticks for messages they read).
+   */
+  readReceiptsEnabled?: boolean;
 };
 
 export function useProfile(userId: string | null) {
@@ -37,10 +42,15 @@ export function useProfile(userId: string | null) {
     try {
       const profilesRef = ref(rtdb, "profiles");
       const unsub = onValue(profilesRef, (snap) => {
-        const data = snap.val() ?? {};
-        setAllProfiles(data);
+        const data = (snap.val() ?? {}) as Record<string, UserProfile & Record<string, unknown>>;
+        setAllProfiles(data as Record<string, UserProfile>);
         if (userId && data[userId]) {
-          setProfile(data[userId]);
+          const row = data[userId];
+          setProfile({
+            dpUrl: row.dpUrl ?? null,
+            dpHash: row.dpHash ?? null,
+            readReceiptsEnabled: row.readReceiptsEnabled === true,
+          });
         }
       }, () => {});
       return () => unsub();
@@ -59,7 +69,11 @@ export function useProfile(userId: string | null) {
           return;
         }
         const url = await uploadToCloudinary(file);
-        const newProfile: UserProfile = { dpUrl: url, dpHash: hash };
+        const newProfile: UserProfile = {
+          dpUrl: url,
+          dpHash: hash,
+          readReceiptsEnabled: profile.readReceiptsEnabled === true,
+        };
         await set(ref(rtdb, `profiles/${userId}`), newProfile);
         setProfile(newProfile);
       } catch {
@@ -67,8 +81,18 @@ export function useProfile(userId: string | null) {
         setUploading(false);
       }
     },
-    [userId, profile.dpHash]
+    [userId, profile.dpHash, profile.readReceiptsEnabled]
   );
+
+  const updateReadReceiptsEnabled = useCallback(async (enabled: boolean) => {
+    if (!userId) return;
+    try {
+      await update(ref(rtdb, `profiles/${userId}`), { readReceiptsEnabled: enabled });
+      setProfile((p) => ({ ...p, readReceiptsEnabled: enabled }));
+    } catch {
+      /* noop */
+    }
+  }, [userId]);
 
   const getDpUrl = useCallback(
     (uid: string) => allProfiles[uid]?.dpUrl ?? null,
@@ -78,12 +102,16 @@ export function useProfile(userId: string | null) {
   const deleteDp = useCallback(async () => {
     if (!userId) return;
     try {
-      const cleared: UserProfile = { dpUrl: null, dpHash: null };
+      const cleared: UserProfile = {
+        dpUrl: null,
+        dpHash: null,
+        readReceiptsEnabled: profile.readReceiptsEnabled === true,
+      };
       await set(ref(rtdb, `profiles/${userId}`), cleared);
       setProfile(cleared);
     } catch {
     }
-  }, [userId]);
+  }, [userId, profile.readReceiptsEnabled]);
 
-  return { profile, uploading, uploadDp, deleteDp, getDpUrl };
+  return { profile, uploading, uploadDp, deleteDp, getDpUrl, updateReadReceiptsEnabled, allProfiles };
 }

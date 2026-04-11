@@ -73,6 +73,7 @@ export function useUserStatus(roomCode: string, userId: string | null) {
 export function useOtherUserStatus(roomCode: string, otherId: string | null) {
   const [otherStatus, setOtherStatus] = useState<UserActivityStatus>("offline");
   const [otherRecordingKind, setOtherRecordingKind] = useState<RecordingKind | null>(null);
+  const [otherTs, setOtherTs] = useState<number>(0);
 
   useEffect(() => {
     if (!otherId || !roomCode) return undefined;
@@ -86,6 +87,7 @@ export function useOtherUserStatus(roomCode: string, otherId: string | null) {
             recordingKind?: string | null;
           } | null;
           const ts = typeof data?.ts === "number" ? data.ts : 0;
+          setOtherTs(ts);
           const stale = ts > 0 && Date.now() - ts > STATUS_STALE_MS;
           if (stale) {
             setOtherStatus("offline");
@@ -105,5 +107,5 @@ export function useOtherUserStatus(roomCode: string, otherId: string | null) {
     }
   }, [roomCode, otherId]);
 
-  return { otherStatus, otherRecordingKind };
+  return { otherStatus, otherRecordingKind, otherTs };
 }

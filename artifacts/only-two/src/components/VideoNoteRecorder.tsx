@@ -19,6 +19,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
+  const [streamLive, setStreamLive] = useState(false);
   const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -36,10 +37,12 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
         streamRef.current = null;
       }
       if (videoRef.current) videoRef.current.srcObject = null;
+      setStreamLive(false);
     };
   }, []);
 
   const acquireStream = useCallback(async (facing: "user" | "environment") => {
+    setStreamLive(false);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -52,6 +55,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
       audio: true,
     });
     streamRef.current = stream;
+    setStreamLive(true);
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
       videoRef.current.muted = true;
@@ -65,6 +69,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
       streamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
       setPreviewReady(false);
+      setStreamLive(false);
       return;
     }
     let cancelled = false;
@@ -74,6 +79,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
         if (cancelled) {
           stopStream(streamRef.current);
           streamRef.current = null;
+          setStreamLive(false);
           return;
         }
         setFacingMode("user");
@@ -88,6 +94,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
           setPermissionError("Camera/Microphone unavailable on this device.");
         }
         setPreviewReady(false);
+        setStreamLive(false);
       }
     })();
     return () => {
@@ -95,6 +102,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
       stopStream(streamRef.current);
       streamRef.current = null;
       if (videoRef.current) videoRef.current.srcObject = null;
+      setStreamLive(false);
     };
   }, [disabled, acquireStream]);
 
@@ -122,13 +130,37 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
     setPreviewReady(false);
+    setStreamLive(false);
   };
 
   const flipCamera = useCallback(async () => {
-    if (disabled || recording || videoBlob || !streamRef.current) return;
+    if (disabled || videoBlob) return;
+    const stream = streamRef.current;
+    if (!stream) return;
     const next = facingMode === "user" ? "environment" : "user";
     try {
-      await acquireStream(next);
+      const vidOnly = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: next },
+        audio: false,
+      });
+      const newVideoTrack = vidOnly.getVideoTracks()[0];
+      if (!newVideoTrack) {
+        vidOnly.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      const oldVideoTracks = stream.getVideoTracks();
+      for (const t of oldVideoTracks) {
+        stream.removeTrack(t);
+        t.stop();
+      }
+      stream.addTrack(newVideoTrack);
+      vidOnly.getTracks().forEach((t) => {
+        if (t !== newVideoTrack) t.stop();
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+      }
       setFacingMode(next);
       setPermissionError(null);
       setPreviewReady(true);
@@ -140,7 +172,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
         setPermissionError("Could not switch camera.");
       }
     }
-  }, [disabled, recording, videoBlob, facingMode, acquireStream]);
+  }, [disabled, videoBlob, facingMode]);
 
   const start = useCallback(async () => {
     if (disabled) return;
@@ -259,7 +291,7 @@ export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }
           <X className="w-4 h-4" />
         </button>
 
-        {!videoBlob && !recording && previewReady && (
+        {!videoBlob && streamLive && (
           <button
             type="button"
             onClick={() => void flipCamera()}

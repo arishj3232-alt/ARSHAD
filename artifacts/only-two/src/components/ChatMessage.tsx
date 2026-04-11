@@ -649,6 +649,10 @@ function ChatMessage({
 }: Props) {
   void _isOwn;
   const isOwn = message.senderId === currentUserId;
+  const cappedReceiptStatus: ReceiptStatus =
+    isOwn && !readReceiptsEnabled && message.receiptStatus === "read"
+      ? "delivered"
+      : message.receiptStatus;
   const [showActions, setShowActions] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
@@ -1137,7 +1141,7 @@ function ChatMessage({
                 )}
                 {isOwn && !isGhost && message.localStatus !== "sending" && (
                   <span className="opacity-50">
-                    <MessageReceiptTicks status={message.receiptStatus} readReceiptsEnabled={readReceiptsEnabled} />
+                    <MessageReceiptTicks status={cappedReceiptStatus} readReceiptsEnabled={readReceiptsEnabled} />
                   </span>
                 )}
               </div>

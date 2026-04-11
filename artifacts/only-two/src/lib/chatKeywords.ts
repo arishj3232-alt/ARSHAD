@@ -34,13 +34,20 @@ export const matchKeyword = (input: string, keyword: string): boolean =>
 
 /**
  * `keywords` must already be normalized (use `normalizeList`). Whole-input match only.
- * Do not use substring / includes on raw messages.
+ * Strict equality via Set lookup (no substring matching).
  */
 export const matchAny = (input: string, keywords: readonly string[] = []): boolean => {
   const norm = normalize(input);
   if (!norm) return false;
-  return keywords.includes(norm);
+  const set = new Set(keywords);
+  return set.has(norm);
 };
+
+function matchNormalized(norm: string, keywords: readonly string[] = []): boolean {
+  if (!norm) return false;
+  const set = new Set(keywords);
+  return set.has(norm);
+}
 
 export const offKeywordToken = (keyword: string): string => {
   const k = normalize(keyword);
@@ -124,15 +131,13 @@ function matchesAnyConfiguredKeyword(input: string, lists: KeywordCommandLists):
     ...lists.readReceiptOnList,
     ...lists.adminList,
   ];
-  return pool.includes(input);
+  for (let i = 0; i < pool.length; i++) {
+    if (pool[i] === input) return true;
+  }
+  return false;
 }
 
-export const handleKeyword = (text: string, ctx: ChatKeywordContext): HandleKeywordResult => {
-  if (!text || !text.trim()) {
-    return { handled: false };
-  }
-
-  const input = normalize(text);
+export function handleKeywordNormalized(input: string, ctx: ChatKeywordContext): HandleKeywordResult {
   if (!input) {
     return { handled: false };
   }
@@ -151,22 +156,22 @@ export const handleKeyword = (text: string, ctx: ChatKeywordContext): HandleKeyw
     setShowAdmin,
   } = ctx;
 
-  if (matchAny(input, lists.revealOffList)) {
+  if (matchNormalized(input, lists.revealOffList)) {
     setRevealMode(false);
     return { handled: true, resetDedupe: true };
   }
 
-  if (settings.allowGhostMode && matchAny(input, lists.ghostOffList)) {
+  if (settings.allowGhostMode && matchNormalized(input, lists.ghostOffList)) {
     setGhostMode(false);
     return { handled: true, resetDedupe: true };
   }
 
-  if (settings.allowReadReceiptToggle && matchAny(input, lists.readReceiptOffList)) {
+  if (settings.allowReadReceiptToggle && matchNormalized(input, lists.readReceiptOffList)) {
     setReadReceipt(false);
     return { handled: true, resetDedupe: true };
   }
 
-  if (matchAny(input, lists.revealOnList)) {
+  if (matchNormalized(input, lists.revealOnList)) {
     if (!isAdmin) {
       return { handled: false };
     }
@@ -174,17 +179,17 @@ export const handleKeyword = (text: string, ctx: ChatKeywordContext): HandleKeyw
     return { handled: true };
   }
 
-  if (settings.allowGhostMode && matchAny(input, lists.ghostOnList)) {
+  if (settings.allowGhostMode && matchNormalized(input, lists.ghostOnList)) {
     setGhostMode(true);
     return { handled: true };
   }
 
-  if (settings.allowReadReceiptToggle && matchAny(input, lists.readReceiptOnList)) {
+  if (settings.allowReadReceiptToggle && matchNormalized(input, lists.readReceiptOnList)) {
     setReadReceipt(true);
     return { handled: true };
   }
 
-  if (matchAny(input, lists.adminList)) {
+  if (matchNormalized(input, lists.adminList)) {
     setShowAdmin(true);
     if (isAdmin) {
       console.log("Admin opened");
@@ -193,4 +198,15 @@ export const handleKeyword = (text: string, ctx: ChatKeywordContext): HandleKeyw
   }
 
   return { handled: false };
+}
+
+export const handleKeyword = (text: string, ctx: ChatKeywordContext): HandleKeywordResult => {
+  if (!text?.trim()) {
+    return { handled: false };
+  }
+  const input = normalize(text);
+  if (!input) {
+    return { handled: false };
+  }
+  return handleKeywordNormalized(input, ctx);
 };
