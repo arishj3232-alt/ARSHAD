@@ -8,18 +8,16 @@ import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
 /** If last status heartbeat is older than this, treat role lock as stale (ghost session). */
 const STALE_ROLE_LOCK_MS = 60_000;
 
-function roleOccupiedByOtherTab(roleNode: unknown, tabId: string): boolean {
-  if (roleNode == null || roleNode === "") return false;
+function roleOccupiedByOtherTab(roleNode: any, tabId: string): boolean {
+  console.log("ROLE DATA:", roleNode, "MY SESSION:", tabId);
+  if (!roleNode) return false;
 
-  // non-object (string / invalid) → occupied
   if (typeof roleNode !== "object") return true;
 
-  const sid = (roleNode as { sessionId?: unknown }).sessionId;
+  const sid = roleNode.sessionId;
 
-  // missing / invalid sessionId → occupied
-  if (typeof sid !== "string" || sid.length === 0) return true;
+  if (!sid || typeof sid !== "string") return true;
 
-  // occupied if different tab
   return sid !== tabId;
 }
 
