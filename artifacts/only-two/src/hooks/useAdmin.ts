@@ -24,6 +24,8 @@ export type AdminSettings = {
   cursorPresenceEnabled: boolean;
   notificationsEnabled: boolean;
   allowGhostMode: boolean;
+  /** Room-wide: show send/read ticks and mark messages seen (synced via RTDB). */
+  readReceiptsEnabled: boolean;
   allowReadReceiptToggle: boolean;
   reactionEmojis: string[];
   fastReactionEmoji: string;
@@ -57,6 +59,7 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   cursorPresenceEnabled: true,
   notificationsEnabled: true,
   allowGhostMode: true,
+  readReceiptsEnabled: true,
   allowReadReceiptToggle: true,
   reactionEmojis: ["❤️", "😂", "👍", "😮", "🔥"],
   fastReactionEmoji: "❤️",
@@ -96,9 +99,14 @@ export function useAdmin() {
             Number.isFinite(rawTimer) && rawTimer >= 1 && rawTimer <= 300
               ? rawTimer
               : DEFAULT_SETTINGS.viewOnceTimerSeconds;
+          const readReceipts =
+            typeof data.readReceiptsEnabled === "boolean"
+              ? data.readReceiptsEnabled
+              : DEFAULT_SETTINGS.readReceiptsEnabled;
           setSettings({
             ...DEFAULT_SETTINGS,
             ...data,
+            readReceiptsEnabled: readReceipts,
             viewOnceTimerSeconds: resolvedTimer,
             videoCallEnabled: resolvedVideoCallEnabled,
             videoCallsEnabled: resolvedVideoCallEnabled,

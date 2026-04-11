@@ -98,7 +98,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   // --- Command-driven states ---
   const [ghostMode, setGhostMode] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false); // persistent toggle
-  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true);
 
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -113,6 +112,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { settings, updateSetting } = useAdmin();
+  const readReceiptsOn = settings.readReceiptsEnabled !== false;
   const { notify } = useNotifications(settings.notificationsEnabled, userId);
   const presence = usePresence(userId, roomCode);
   const { isConnected } = useNetworkStatus();
@@ -417,7 +417,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         return true;
       }
       if (lower === offKeyword(settings.readReceiptKeyword) && settings.allowReadReceiptToggle) {
-        setReadReceiptsEnabled(false);
+        void updateSetting("readReceiptsEnabled", false);
         return true;
       }
 
@@ -444,16 +444,13 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       }
 
       if (trimmed === settings.readReceiptKeyword && settings.allowReadReceiptToggle) {
-        setReadReceiptsEnabled((prev) => {
-          const next = !prev;
-          return next;
-        });
+        void updateSetting("readReceiptsEnabled", !readReceiptsOn);
         return true;
       }
 
       return false;
     },
-    [settings]
+    [settings, readReceiptsOn, updateSetting]
   );
 
   // Incoming message notifications
@@ -540,10 +537,10 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
 
   // Mark seen (skipped in ghost mode / when read receipts off)
   useEffect(() => {
-    if (!readReceiptsEnabled || ghostMode) return;
+    if (!readReceiptsOn || ghostMode) return;
     const unseenFromOther = messages.filter((m) => m.senderId !== userId && !m.seen && !m.deleted && !m.ghost);
     unseenFromOther.forEach((m) => markSeen(m.id));
-  }, [messages, userId, markSeen, readReceiptsEnabled, ghostMode]);
+  }, [messages, userId, markSeen, readReceiptsOn, ghostMode]);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -763,7 +760,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
             </p>
           </div>
 
-          {!readReceiptsEnabled && (
+          {!readReceiptsOn && (
             <div title="Read receipts off" className="text-white/20 flex-shrink-0">
               <EyeOff className="w-4 h-4" />
             </div>
@@ -842,7 +839,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                         viewOnceLimitText={settings.viewOnceLimitText}
                         dpUrl={msg.senderId !== userId ? otherDpUrl : null}
                         showDeleted={showDeleted}
-                        readReceiptsEnabled={readReceiptsEnabled}
+                        readReceiptsEnabled={readReceiptsOn}
                         viewOnceEnabled={settings.viewOnceEnabled}
                         viewOnceTimerMs={viewOnceTimerMs}
                         imageDownloadProtection={settings.imageDownloadProtection}

@@ -20,6 +20,7 @@ const boolGroups: { title: string; rows: ToggleRow[] }[] = [
     title: "Chat",
     rows: [
       { key: "messagingEnabled", label: "Messaging" },
+      { key: "readReceiptsEnabled", label: "Read receipts (room)" },
       { key: "repliesEnabled", label: "Replies" },
       { key: "reactionsEnabled", label: "Reactions" },
     ],

@@ -141,6 +141,8 @@ export function useWebRTC(
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  /** Toggle target when `getSettings().facingMode` is missing (common on mobile). */
+  const flipFacingRef = useRef<"user" | "environment">("environment");
 
   const snapshotUnsubsRef = useRef<Array<() => void>>([]);
 
@@ -468,8 +470,8 @@ export function useWebRTC(
     console.log("[ICE] using config", retryAttemptRef.current >= 2 ? "fallback" : "primary");
     const pc = new RTCPeerConnection(iceConfig);
     pcRef.current = pc;
-    pc.addTransceiver("video", { direction: "sendrecv" });
-    pc.addTransceiver("audio", { direction: "sendrecv" });
+    // Do not call addTransceiver here — addTrack (below) already creates sendrecv m-lines.
+    // Extra transceivers duplicate m= sections and commonly break remote video/audio.
 
     pc.ontrack = (event) => {
       console.log("[TRACK RECEIVED]", event.streams);
@@ -497,9 +499,13 @@ export function useWebRTC(
         console.log("[ATTACH STREAM]");
         const el = remoteVideoRef.current;
         el.srcObject = remoteStream;
-        el.onloadedmetadata = () => {
-          void el.play().catch(() => {});
+        const tryPlayVideo = () => {
+          void el.play().catch(() => {
+            window.setTimeout(() => void el.play().catch(() => {}), 300);
+          });
         };
+        el.onloadedmetadata = tryPlayVideo;
+        tryPlayVideo();
         console.log("[REMOTE VIDEO SRC]", el.srcObject);
       };
 
@@ -516,9 +522,15 @@ export function useWebRTC(
         const audioEl = remoteAudioRef.current;
         if (!audioEl) return;
         audioEl.srcObject = remoteStream;
-        audioEl.onloadedmetadata = () => {
-          void audioEl.play().catch(() => {});
+        audioEl.muted = false;
+        audioEl.volume = 1;
+        const tryPlay = () => {
+          void audioEl.play().catch(() => {
+            window.setTimeout(() => void audioEl.play().catch(() => {}), 300);
+          });
         };
+        audioEl.onloadedmetadata = tryPlay;
+        tryPlay();
       };
       if (remoteAudioRef.current) {
         attachAudio();
@@ -697,7 +709,8 @@ export function useWebRTC(
       const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
       if (videoSender) {
         const params = videoSender.getParameters();
-        params.encodings = [{ maxBitrate: 150000 }];
+        // ~150k was far too low for usable video and caused broken/washed streams on many networks.
+        params.encodings = [{ maxBitrate: 1_500_000, networkPriority: "high" }];
         void videoSender.setParameters(params).catch(() => {});
       }
       console.log("Caller tracks:", stream.getTracks());
@@ -940,7 +953,7 @@ export function useWebRTC(
         const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
         if (videoSender) {
           const params = videoSender.getParameters();
-          params.encodings = [{ maxBitrate: 150000 }];
+          params.encodings = [{ maxBitrate: 1_500_000, networkPriority: "high" }];
           void videoSender.setParameters(params).catch(() => {});
         }
         console.log("Callee tracks:", stream.getTracks());
@@ -1161,41 +1174,58 @@ export function useWebRTC(
     if (!localStreamRef.current || !pcRef.current) return;
     const oldTrack = localStreamRef.current.getVideoTracks()[0];
     if (!oldTrack) return;
-    const currentFacing = oldTrack.getSettings().facingMode ?? "user";
-    const nextFacing = currentFacing === "user" ? "environment" : "user";
+
+    const settingsFacing = oldTrack.getSettings().facingMode as string | undefined;
+    let nextFacing: "user" | "environment";
+    if (settingsFacing === "environment" || settingsFacing === "user") {
+      nextFacing = settingsFacing === "user" ? "environment" : "user";
+      flipFacingRef.current = nextFacing;
+    } else {
+      flipFacingRef.current = flipFacingRef.current === "user" ? "environment" : "user";
+      nextFacing = flipFacingRef.current;
+    }
+
+    const replaceVideoTrack = async (newTrack: MediaStreamTrack) => {
+      const sender = pcRef.current?.getSenders().find((s) => s.track?.kind === "video");
+      if (sender) await sender.replaceTrack(newTrack);
+      localStreamRef.current!.removeTrack(oldTrack);
+      localStreamRef.current!.addTrack(newTrack);
+      if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
+      oldTrack.stop();
+    };
+
     try {
       const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: nextFacing },
+        video: { facingMode: { ideal: nextFacing }, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
       const newTrack = newStream.getVideoTracks()[0];
-      const sender = pcRef.current.getSenders().find((s) => s.track?.kind === "video");
-      if (sender) await sender.replaceTrack(newTrack);
-      localStreamRef.current.removeTrack(oldTrack);
-      localStreamRef.current.addTrack(newTrack);
-      if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-      oldTrack.stop();
+      if (newTrack) await replaceVideoTrack(newTrack);
     } catch {
       try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const cameras = devices.filter((d) => d.kind === "videoinput");
-        if (cameras.length < 2) return;
-        const currentId = oldTrack.getSettings().deviceId;
-        const other = cameras.find((c) => c.deviceId !== currentId);
-        if (!other) return;
         const newStream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: other.deviceId } },
+          video: { facingMode: { exact: nextFacing } },
           audio: false,
         });
         const newTrack = newStream.getVideoTracks()[0];
-        const sender = pcRef.current.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) await sender.replaceTrack(newTrack);
-        localStreamRef.current.removeTrack(oldTrack);
-        localStreamRef.current.addTrack(newTrack);
-        if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-        oldTrack.stop();
+        if (newTrack) await replaceVideoTrack(newTrack);
       } catch {
-        /* */
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const cameras = devices.filter((d) => d.kind === "videoinput");
+          if (cameras.length < 2) return;
+          const currentId = oldTrack.getSettings().deviceId;
+          const other = cameras.find((c) => c.deviceId && c.deviceId !== currentId);
+          if (!other?.deviceId) return;
+          const newStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: { exact: other.deviceId } },
+            audio: false,
+          });
+          const newTrack = newStream.getVideoTracks()[0];
+          if (newTrack) await replaceVideoTrack(newTrack);
+        } catch {
+          /* */
+        }
       }
     }
   }, []);
