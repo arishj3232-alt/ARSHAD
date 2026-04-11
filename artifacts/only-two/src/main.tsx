@@ -7,6 +7,10 @@ import {
 } from "./envGate";
 console.log("ENV CHECK:", import.meta.env);
 console.log("BUILD VERSION:", "v2-new");
+console.log("BUILD VERSION:", "v3-final");
+const __force = "rebuild-" + Date.now();
+
+
 const rootEl = document.getElementById("root")!;
 const root = createRoot(rootEl);
 const missing = getMissingFirebaseEnvKeys();
