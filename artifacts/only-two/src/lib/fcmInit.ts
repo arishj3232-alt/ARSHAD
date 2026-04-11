@@ -77,6 +77,12 @@ export async function getFcmTokenWithFirebase(
     token = await tryCandidates();
   }
 
+  if (!token) {
+    console.error(
+      "[FCM] VAPID key rejected by the browser. Open Firebase Console → Project settings → Cloud Messaging → Web Push certificates. Use the **public** key for **this** Firebase project (or generate a new key pair), paste it as VITE_FIREBASE_VAPID_KEY on Vercel, redeploy. Keys from another project will always fail."
+    );
+  }
+
   if (token) {
     try {
       const key = LS_PREFIX + userId;

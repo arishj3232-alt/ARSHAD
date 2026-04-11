@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { Heart, Lock, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { onValue, ref } from "firebase/database";
+import { get, onValue, ref, set } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
+
+/** If last status heartbeat is older than this, treat role lock as stale (ghost session). */
+const STALE_ROLE_LOCK_MS = 60_000;
 
 type Props = {
   onJoin: (payload: { role: "shelly" | "arshad"; name: string; roomCode: string }) => void;
@@ -57,6 +60,53 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
       });
     });
     return () => unsub();
+  }, [code]);
+
+  /** Remove ghost role locks when the user is not actively online (crashed tab / no leave). */
+  useEffect(() => {
+    const room = code.trim();
+    if (!room) return undefined;
+    let cancelled = false;
+    const rolesRef = ref(rtdb, `rooms/${room}/roles`);
+    const sweep = async () => {
+      let snap;
+      try {
+        snap = await get(rolesRef);
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+      const data = (snap.val() ?? {}) as Record<string, { userId?: string } | undefined>;
+      for (const key of ["shelly", "arshad"] as const) {
+        const entry = data[key];
+        const uid = entry?.userId;
+        if (!uid) continue;
+        let stSnap;
+        try {
+          stSnap = await get(ref(rtdb, `status/${room}/${uid}`));
+        } catch {
+          continue;
+        }
+        const v = stSnap.val() as { status?: string; ts?: number } | null;
+        const ts = typeof v?.ts === "number" ? v.ts : 0;
+        const looksActive = v?.status === "online" && Date.now() - ts < STALE_ROLE_LOCK_MS;
+        if (!looksActive) {
+          try {
+            await set(ref(rtdb, `rooms/${room}/roles/${key}`), null);
+          } catch {
+            /* rules / offline */
+          }
+        }
+      }
+    };
+    const unsub = onValue(rolesRef, () => {
+      void sweep();
+    });
+    void sweep();
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, [code]);
 
   const handleSubmit = async (e: React.FormEvent) => {
