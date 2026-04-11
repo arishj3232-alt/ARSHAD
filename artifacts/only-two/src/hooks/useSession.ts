@@ -363,23 +363,20 @@ export function useSession() {
       }
 
       const roleRef = ref(rtdb, `rooms/${normalizedRoomCode}/roles/${selectedRole}`);
-      const txResult = await runTransaction(roleRef, (current) => {
-        if (current == null) {
+      const txResult = await runTransaction(roleRef, (cur) => {
+        if (cur == null) {
           return { userId, userName: resolvedName, at: Date.now(), sessionId: tabSessionId };
         }
-        if (typeof current === "string") {
+        if (typeof cur !== "object") {
           return undefined;
         }
-        if (typeof current !== "object") {
-          return undefined;
-        }
-        const cur = current as Record<string, unknown>;
-        const sid = cur.sessionId;
+        const o = cur as Record<string, unknown>;
+        const sid = o.sessionId;
         if (typeof sid !== "string" || sid.length === 0) {
           return undefined;
         }
         if (sid === tabSessionId) {
-          return { userId, userName: resolvedName, at: Date.now(), sessionId: tabSessionId };
+          return { ...o, at: Date.now() };
         }
         return undefined;
       });

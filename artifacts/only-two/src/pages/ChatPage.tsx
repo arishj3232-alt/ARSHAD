@@ -178,7 +178,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const { settings, updateSetting } = useAdmin();
 
   useEffect(() => {
-    if (showAdmin) setAdminStealthRead(true);
+    setAdminStealthRead(showAdmin);
   }, [showAdmin]);
   useNotifications(settings.notificationsEnabled, userId);
   const { vibration, toggleVibration } = useVibrationPreference(userId);
@@ -315,7 +315,6 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
 
   useChatReceipts(messages, userId, markDelivered, markSeen, {
     roomReadReceiptsEnabled,
-    hideReadSignalsFromReader: myReadReceiptsHide,
     adminStealthRead,
     ghostMode,
   });

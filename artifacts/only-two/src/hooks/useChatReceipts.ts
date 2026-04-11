@@ -4,11 +4,6 @@ import type { Message } from "@/hooks/useMessages";
 type Options = {
   /** Room-level feature: when false, never mark messages as read. */
   roomReadReceiptsEnabled: boolean;
-  /**
-   * Per-user: when true, this user does not mark others' messages as read
-   * (their read signals are hidden — others never get blue ticks from this reader).
-   */
-  hideReadSignalsFromReader: boolean;
   /** Admin stealth: do not mark others' messages as read (no blue ticks for them). */
   adminStealthRead: boolean;
   ghostMode: boolean;
@@ -16,15 +11,17 @@ type Options = {
 
 /**
  * Client-side WhatsApp-style receipts: mark incoming messages delivered, then read when chat is visible.
+ * Read marking is not gated on “hide read receipts” UI preference — masking stays in ChatMessage only.
  */
 export function useChatReceipts(
   messages: Message[],
   currentUserId: string | null,
   markDelivered: (id: string) => void | Promise<void>,
   markSeen: (id: string) => void | Promise<void>,
-  { roomReadReceiptsEnabled, hideReadSignalsFromReader, adminStealthRead, ghostMode }: Options
+  { roomReadReceiptsEnabled, adminStealthRead, ghostMode }: Options
 ) {
   const deliveredPendingRef = useRef<Set<string>>(new Set());
+  const seenPendingRef = useRef<Set<string>>(new Set());
   const [tabVisible, setTabVisible] = useState(
     () => typeof document === "undefined" || document.visibilityState === "visible"
   );
@@ -52,35 +49,22 @@ export function useChatReceipts(
 
   useEffect(() => {
     if (!currentUserId) return;
-    if (
-      !roomReadReceiptsEnabled ||
-      hideReadSignalsFromReader ||
-      adminStealthRead ||
-      ghostMode
-    )
-      return;
     if (!tabVisible) return;
 
-    const unseen = messages.filter(
-      (m) =>
-        m.senderId !== currentUserId &&
-        !m.deleted &&
-        !m.deletedForEveryone &&
-        !m.ghost &&
-        !(currentUserId && m.deletedFor?.[currentUserId]) &&
-        !m.seen &&
-        roomReadReceiptsEnabled &&
-        !hideReadSignalsFromReader
-    );
-    unseen.forEach((m) => void markSeen(m.id));
-  }, [
-    messages,
-    currentUserId,
-    markSeen,
-    roomReadReceiptsEnabled,
-    hideReadSignalsFromReader,
-    adminStealthRead,
-    ghostMode,
-    tabVisible,
-  ]);
+    for (const m of messages) {
+      if (m.senderId === currentUserId) continue;
+      if (m.deleted || m.deletedForEveryone || m.ghost) continue;
+      if (currentUserId && m.deletedFor?.[currentUserId]) continue;
+      if (m.seen) continue;
+      if (!roomReadReceiptsEnabled) continue;
+      if (adminStealthRead) continue;
+      if (ghostMode) continue;
+      if (seenPendingRef.current.has(m.id)) continue;
+
+      seenPendingRef.current.add(m.id);
+      void Promise.resolve(markSeen(m.id)).finally(() => {
+        seenPendingRef.current.delete(m.id);
+      });
+    }
+  }, [messages, currentUserId, markSeen, roomReadReceiptsEnabled, adminStealthRead, ghostMode, tabVisible]);
 }

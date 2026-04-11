@@ -8,18 +8,13 @@ import { getOrCreateTabSessionId } from "@/lib/tabSessionId";
 /** If last status heartbeat is older than this, treat role lock as stale (ghost session). */
 const STALE_ROLE_LOCK_MS = 60_000;
 
-function roleSlotHeld(val: unknown): boolean {
-  return val != null && val !== "";
-}
-
-/** `undefined` = legacy / string node / missing field → treat as occupied for picker. */
-function roleEntrySessionId(val: unknown): string | undefined {
-  if (val == null || val === "" || typeof val === "string") return undefined;
-  if (typeof val === "object" && val !== null) {
-    const s = (val as { sessionId?: unknown }).sessionId;
-    return typeof s === "string" && s.length > 0 ? s : undefined;
-  }
-  return undefined;
+/** Slot held by someone other than this tab; non-object / missing sessionId / legacy string → occupied. */
+function roleOccupiedByOtherTab(roleNode: unknown, tabId: string): boolean {
+  if (roleNode == null || roleNode === "") return false;
+  if (typeof roleNode !== "object" || roleNode === null) return true;
+  const sid = (roleNode as { sessionId?: unknown }).sessionId;
+  if (typeof sid !== "string" || sid.length === 0) return true;
+  return sid !== tabId;
 }
 
 type Props = {
@@ -53,13 +48,9 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
     const rolesRef = ref(rtdb, `rooms/${normalizedRoom}/roles`);
     const unsub = onValue(rolesRef, (snap) => {
       const data = (snap.val() ?? {}) as Record<string, unknown>;
-      const myTabSessionId = getOrCreateTabSessionId();
-      const shellySid = roleEntrySessionId(data.shelly);
-      const arshadSid = roleEntrySessionId(data.arshad);
-      const nextShellyBlocked =
-        roleSlotHeld(data.shelly) && (shellySid === undefined || shellySid !== myTabSessionId);
-      const nextArshadBlocked =
-        roleSlotHeld(data.arshad) && (arshadSid === undefined || arshadSid !== myTabSessionId);
+      const tabId = getOrCreateTabSessionId();
+      const nextShellyBlocked = roleOccupiedByOtherTab(data.shelly, tabId);
+      const nextArshadBlocked = roleOccupiedByOtherTab(data.arshad, tabId);
       setRoleBlocked((prev) => {
         (["shelly", "arshad"] as const).forEach((k) => {
           const next = k === "shelly" ? nextShellyBlocked : nextArshadBlocked;
