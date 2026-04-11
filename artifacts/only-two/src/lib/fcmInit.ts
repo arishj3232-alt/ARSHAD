@@ -19,8 +19,9 @@ function isInvalidVapidError(e: unknown): boolean {
 }
 
 /**
- * Firebase-only token path (no manual PushManager.subscribe).
- * Pass the registration returned from `navigator.serviceWorker.register('.../firebase-messaging-sw.js')`.
+ * Firebase `getToken` only (no manual PushManager).
+ * Per Firebase docs, `vapidKey` is optional — the SDK uses a default key if omitted.
+ * We try env keys first; if the browser rejects them, we fall back to omitting `vapidKey`.
  */
 export async function getFcmTokenWithFirebase(
   messaging: Messaging,
@@ -28,59 +29,77 @@ export async function getFcmTokenWithFirebase(
   userId: string
 ): Promise<string | null> {
   const envRaw = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
+  const envMissing = envRaw === undefined || String(envRaw).trim() === "";
 
-  if (envRaw === undefined || String(envRaw).trim() === "") {
+  if (envMissing) {
     console.error(
-      "[FCM] ENV NOT LOADED FROM VERCEL — VITE_FIREBASE_VAPID_KEY is missing or empty. Add it in Vercel → Project → Settings → Environment Variables (Production), then redeploy."
+      "[FCM] ENV NOT LOADED FROM VERCEL — VITE_FIREBASE_VAPID_KEY is missing or empty. Will try Firebase default VAPID; add the key in Vercel for best results."
     );
-    return null;
   }
 
-  const candidates = buildVapidKeyCandidates(envRaw);
-  if (candidates.length === 0) {
-    console.error(
-      "[FCM] VITE_FIREBASE_VAPID_KEY is set but invalid (must decode to a valid 65-byte Web Push key). Re-copy from Firebase Console → Cloud Messaging → Web Push certificates."
-    );
-    return null;
-  }
-
-  logVapidDebug(candidates);
-
-  const tryCandidates = async (): Promise<string | null> => {
-    let lastErr: unknown;
-    for (const vapidKey of candidates) {
-      try {
-        const token = await getToken(messaging, {
-          vapidKey,
-          serviceWorkerRegistration: registration,
-        });
-        if (token && vapidKey !== candidates[0]) {
-          console.warn(
-            "[FCM] Subscribed with an alternate VAPID spelling — update VITE_FIREBASE_VAPID_KEY in Vercel to the working value."
-          );
-        }
-        return token || null;
-      } catch (e: unknown) {
-        lastErr = e;
-        if (isInvalidVapidError(e)) continue;
-        throw e;
-      }
+  let candidates: string[] = [];
+  if (!envMissing) {
+    candidates = buildVapidKeyCandidates(envRaw);
+    if (candidates.length === 0) {
+      console.warn(
+        "[FCM] VITE_FIREBASE_VAPID_KEY is not a valid Web Push key — will try Firebase default VAPID."
+      );
     }
-    if (lastErr) console.error("[FCM] getToken failed for all VAPID candidates:", lastErr);
-    return null;
+  }
+
+  const tryWithVapidKeys = async (): Promise<string | null> => {
+    if (candidates.length === 0) return null;
+    logVapidDebug(candidates);
+    const run = async (): Promise<string | null> => {
+      let lastErr: unknown;
+      for (const vapidKey of candidates) {
+        try {
+          const token = await getToken(messaging, {
+            vapidKey,
+            serviceWorkerRegistration: registration,
+          });
+          if (token && vapidKey !== candidates[0]) {
+            console.warn(
+              "[FCM] Subscribed with an alternate VAPID spelling — update VITE_FIREBASE_VAPID_KEY in Vercel to the working value."
+            );
+          }
+          return token || null;
+        } catch (e: unknown) {
+          lastErr = e;
+          if (isInvalidVapidError(e)) continue;
+          throw e;
+        }
+      }
+      if (lastErr) console.error("[FCM] getToken failed for all VAPID candidates:", lastErr);
+      return null;
+    };
+    let token = await run();
+    if (!token) {
+      console.warn("[FCM] Retrying VAPID getToken once after delay…");
+      await sleep(800);
+      token = await run();
+    }
+    return token;
   };
 
-  let token = await tryCandidates();
-  if (!token) {
-    console.warn("[FCM] Retrying getToken once after delay…");
-    await sleep(800);
-    token = await tryCandidates();
-  }
+  let token = await tryWithVapidKeys();
 
   if (!token) {
-    console.error(
-      "[FCM] VAPID key rejected by the browser. Open Firebase Console → Project settings → Cloud Messaging → Web Push certificates. Use the **public** key for **this** Firebase project (or generate a new key pair), paste it as VITE_FIREBASE_VAPID_KEY on Vercel, redeploy. Keys from another project will always fail."
-    );
+    console.warn("[FCM] Falling back to getToken without vapidKey (Firebase-managed default VAPID).");
+    try {
+      token =
+        (await getToken(messaging, {
+          serviceWorkerRegistration: registration,
+        })) || null;
+      if (token) {
+        console.log("[FCM] Token obtained via SDK default VAPID. Prefer setting a correct VITE_FIREBASE_VAPID_KEY from Firebase Console → Cloud Messaging → Web Push certificates.");
+      }
+    } catch (e: unknown) {
+      console.error("[FCM] getToken without vapidKey also failed:", e);
+      console.error(
+        "[FCM] Fix: Firebase Console → Project settings → Cloud Messaging → Web Push certificates → generate or copy the **public** key into VITE_FIREBASE_VAPID_KEY on Vercel (same project as apiKey/appId), then redeploy."
+      );
+    }
   }
 
   if (token) {
