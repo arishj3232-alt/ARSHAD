@@ -1,37 +1,31 @@
 import { useCallback, useEffect, useRef } from "react";
-import { getToken, onMessage, isSupported } from "firebase/messaging";
+import { onMessage, isSupported } from "firebase/messaging";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, getFirebaseMessaging } from "@/lib/firebase";
-import { buildVapidKeyCandidates } from "@/lib/fcmVapid";
-
-const VAPID_KEY_RAW = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
+import { getFcmTokenWithFirebase } from "@/lib/fcmInit";
 
 /**
- * FCM web push: foreground via onMessage; background via `public/firebase-messaging-sw.js`.
- * Token is stored on `users/{userId}` for Cloud Functions (`functions/`) to send pushes when the app is closed.
+ * FCM: Firebase `getToken` only (no manual PushManager). Foreground via `onMessage`; background via `public/firebase-messaging-sw.js` (generated at build).
  */
 export function useNotifications(enabled: boolean, userId?: string | null) {
   const onMessageUnsubRef = useRef<(() => void) | undefined>(undefined);
-  /** Skip duplicate getToken for the same user after first success (e.g. React StrictMode remount). */
   const tokenRegisteredForUserRef = useRef<string | null>(null);
+
+  const showForegroundNotification = useCallback((title: string, body: string, icon = "/favicon.svg") => {
+    if (!enabled) return;
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      new Notification(title, { body, icon, silent: false, tag: "onlytwo-fcm" });
+    } catch {
+      /* */
+    }
+  }, [enabled]);
 
   const notify = useCallback(
     (title: string, body: string) => {
-      if (!enabled) return;
-      if ("Notification" in window && Notification.permission === "granted") {
-        try {
-          new Notification(title, {
-            body,
-            icon: "/favicon.svg",
-            silent: false,
-            tag: "onlytwo",
-          });
-        } catch {
-          // ignore
-        }
-      }
+      showForegroundNotification(title, body);
     },
-    [enabled]
+    [showForegroundNotification]
   );
 
   useEffect(() => {
@@ -52,21 +46,16 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
     let cancelled = false;
 
     const registerFcm = async () => {
-      const vapidCandidates = buildVapidKeyCandidates(VAPID_KEY_RAW);
-      if (vapidCandidates.length === 0) {
-        console.error(
-          "[FCM] Missing or invalid VITE_FIREBASE_VAPID_KEY — set it from Firebase Console → Cloud Messaging → Web Push certificates (public key), then redeploy."
-        );
-        return;
-      }
-
       try {
         const supported = await isSupported().catch(() => false);
-        if (!supported || cancelled) return;
+        if (!supported || cancelled) {
+          if (!supported) console.warn("[FCM] Messaging not supported in this browser.");
+          return;
+        }
 
         const permission = await Notification.requestPermission();
         if (permission !== "granted") {
-          console.warn("[FCM] Permission denied");
+          console.warn("[FCM] Notification permission denied");
           return;
         }
 
@@ -78,44 +67,20 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
 
         const messaging = getFirebaseMessaging();
         if (!messaging) {
-          console.warn("[notifications] Firebase Messaging not available in this browser.");
+          console.warn("[FCM] getMessaging() unavailable (check Firebase config / HTTPS).");
           return;
         }
 
         if (tokenRegisteredForUserRef.current !== userId) {
-          let token: string | undefined;
-          let lastVapidErr: unknown;
-          for (const vapidKey of vapidCandidates) {
-            try {
-              token = await getToken(messaging, {
-                vapidKey,
-                serviceWorkerRegistration: registration,
-              });
-              if (vapidKey !== vapidCandidates[0]) {
-                console.warn(
-                  "[FCM] Subscribed using an alternate VAPID spelling — update VITE_FIREBASE_VAPID_KEY in Vercel to this working value to avoid ambiguity."
-                );
-              }
-              break;
-            } catch (e: unknown) {
-              lastVapidErr = e;
-              const name =
-                e && typeof e === "object" && "name" in e ? String((e as { name: string }).name) : "";
-              const msg = e instanceof Error ? e.message : String(e);
-              if (
-                name === "InvalidAccessError" ||
-                msg.includes("applicationServerKey") ||
-                msg.includes("InvalidAccessError")
-              ) {
-                continue;
-              }
-              throw e;
-            }
-          }
+          const token = await getFcmTokenWithFirebase(messaging, registration, userId);
+          if (cancelled) return;
+
           if (!token) {
-            throw lastVapidErr ?? new Error("FCM getToken failed for all VAPID candidates");
+            console.error("[FCM] No token — push will not work until VAPID/env and permission are fixed.");
+            return;
           }
-          console.log("[FCM] Token registered");
+
+          console.log("[FCM] Token registered (length:", token.length, ")");
 
           try {
             await setDoc(
@@ -134,14 +99,23 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
 
         if (cancelled) return;
 
+        onMessageUnsubRef.current?.();
         onMessageUnsubRef.current = onMessage(messaging, (payload) => {
-          console.log("[FCM FOREGROUND]", payload);
-          const { title, body } = payload.notification ?? {};
-          if (title && body) notify(title, body);
+          console.log("[FCM] Foreground message:", payload);
+          const n = payload.notification;
+          if (n?.title) {
+            const icon =
+              typeof n.icon === "string" && n.icon.length > 0 ? n.icon : "/favicon.svg";
+            showForegroundNotification(n.title, n.body ?? "", icon);
+            return;
+          }
+          const d = payload.data as Record<string, string> | undefined;
+          if (d?.title || d?.body) {
+            showForegroundNotification(d.title ?? "Message", d.body ?? "", "/favicon.svg");
+          }
         });
       } catch (err) {
-        console.error("[FCM] setup error", err);
-        console.warn("[notifications] Service worker / FCM setup failed:", err);
+        console.error("[FCM] setup error:", err);
       }
     };
 
@@ -152,7 +126,7 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
       onMessageUnsubRef.current?.();
       onMessageUnsubRef.current = undefined;
     };
-  }, [enabled, userId, notify]);
+  }, [enabled, userId, showForegroundNotification]);
 
   useEffect(() => {
     if (!enabled) {

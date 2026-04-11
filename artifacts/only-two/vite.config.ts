@@ -73,8 +73,10 @@ messaging.onBackgroundMessage(function (payload) {
   console.log("[SW] Background message", payload);
   var n = payload.notification || {};
   var d = payload.data || {};
-  var title = n.title || d.title || "Incoming Call";
-  var bodyText = n.body || d.body || "Tap to answer";
+  var title = n.title || d.title || "Notification";
+  var bodyText = n.body || d.body || "";
+  var icon = (typeof n.icon === "string" && n.icon) ? n.icon : "/favicon.svg";
+
   if (d.type === "missed_call") {
     title = n.title || d.title || "Missed Call";
     bodyText = n.body || d.body || "You missed a call";
@@ -92,14 +94,26 @@ messaging.onBackgroundMessage(function (payload) {
     self.registration.showNotification(title, missedOpts);
     return;
   }
+
+  if (d.type === "call") {
+    title = n.title || d.title || "Incoming Call";
+    bodyText = n.body || d.body || "Tap to answer";
+    self.registration.showNotification(title, {
+      body: bodyText,
+      icon: "/favicon.svg",
+      data: d,
+      actions: [
+        { action: "accept", title: "Accept" },
+        { action: "reject", title: "Reject" },
+      ],
+    });
+    return;
+  }
+
   self.registration.showNotification(title, {
-    body: bodyText,
-    icon: "/favicon.svg",
+    body: bodyText || "You have a new message",
+    icon: icon,
     data: d,
-    actions: [
-      { action: "accept", title: "Accept" },
-      { action: "reject", title: "Reject" },
-    ],
   });
 });
 
