@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { ref, onValue, set } from "firebase/database";
+import { ref, onValue, update } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 export type ReplyMode = "tap" | "swipe" | "both";
@@ -11,10 +11,14 @@ export type AdminSettings = {
   imageUploadEnabled: boolean;
   videoUploadEnabled: boolean;
   viewOnceEnabled: boolean;
+  viewOnceTimerSeconds: number;
   videoNotesEnabled: boolean;
+  videoNoteEnabled: boolean;
   voiceMessagesEnabled: boolean;
   voiceCallsEnabled: boolean;
   videoCallsEnabled: boolean;
+  videoCallEnabled: boolean;
+  imageDownloadProtection: boolean;
   typingIndicatorEnabled: boolean;
   lastSeenEnabled: boolean;
   cursorPresenceEnabled: boolean;
@@ -40,10 +44,14 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   imageUploadEnabled: true,
   videoUploadEnabled: true,
   viewOnceEnabled: true,
+  viewOnceTimerSeconds: 15,
   videoNotesEnabled: true,
+  videoNoteEnabled: true,
   voiceMessagesEnabled: true,
   voiceCallsEnabled: true,
   videoCallsEnabled: true,
+  videoCallEnabled: true,
+  imageDownloadProtection: true,
   typingIndicatorEnabled: true,
   lastSeenEnabled: true,
   cursorPresenceEnabled: true,
@@ -71,31 +79,60 @@ export function useAdmin() {
         ref(rtdb, "admin/settings"),
         (snap) => {
           const data = snap.val();
-          if (data) {
-            setSettings({
-              ...DEFAULT_SETTINGS,
-              ...data,
-              reactionEmojis: Array.isArray(data.reactionEmojis)
-                ? data.reactionEmojis
-                : DEFAULT_SETTINGS.reactionEmojis,
-            });
+          if (!data) {
+            setSettings(DEFAULT_SETTINGS);
+            return;
           }
+          const resolvedVideoCallEnabled =
+            typeof data.videoCallEnabled === "boolean"
+              ? data.videoCallEnabled
+              : ((data.videoCallsEnabled as boolean | undefined) ?? DEFAULT_SETTINGS.videoCallEnabled);
+          const resolvedVideoNoteEnabled =
+            typeof data.videoNoteEnabled === "boolean"
+              ? data.videoNoteEnabled
+              : ((data.videoNotesEnabled as boolean | undefined) ?? DEFAULT_SETTINGS.videoNoteEnabled);
+          const rawTimer = Number(data.viewOnceTimerSeconds);
+          const resolvedTimer =
+            Number.isFinite(rawTimer) && rawTimer >= 1 && rawTimer <= 300
+              ? rawTimer
+              : DEFAULT_SETTINGS.viewOnceTimerSeconds;
+          setSettings({
+            ...DEFAULT_SETTINGS,
+            ...data,
+            viewOnceTimerSeconds: resolvedTimer,
+            videoCallEnabled: resolvedVideoCallEnabled,
+            videoCallsEnabled: resolvedVideoCallEnabled,
+            videoNoteEnabled: resolvedVideoNoteEnabled,
+            videoNotesEnabled: resolvedVideoNoteEnabled,
+            reactionEmojis: Array.isArray(data.reactionEmojis)
+              ? data.reactionEmojis
+              : DEFAULT_SETTINGS.reactionEmojis,
+          });
         },
         () => {}
       );
       return () => unsub();
-    } catch {}
+    } catch {
+      return undefined;
+    }
   }, []);
 
   const updateSetting = useCallback(
     async <K extends keyof AdminSettings>(key: K, value: AdminSettings[K]) => {
-      const next = { ...settings, [key]: value };
-      setSettings(next);
+      setSettings((prev) => ({ ...prev, [key]: value }));
       try {
-        await set(ref(rtdb, "admin/settings"), next);
+        if (key === "videoCallEnabled") {
+          await update(ref(rtdb, "admin/settings"), { videoCallEnabled: value, videoCallsEnabled: value });
+          return;
+        }
+        if (key === "videoNoteEnabled") {
+          await update(ref(rtdb, "admin/settings"), { videoNoteEnabled: value, videoNotesEnabled: value });
+          return;
+        }
+        await update(ref(rtdb, "admin/settings"), { [key]: value });
       } catch {}
     },
-    [settings]
+    []
   );
 
   return { settings, updateSetting };

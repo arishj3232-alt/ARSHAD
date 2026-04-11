@@ -1,42 +1,23 @@
-import { useState, useCallback, useEffect, useRef } from "react";
-import { getToken, onMessage } from "firebase/messaging";
-import { ref, set, get } from "firebase/database";
-import { rtdb, getFirebaseMessaging } from "@/lib/firebase";
+import { useCallback, useEffect, useRef } from "react";
+import { getToken, onMessage, isSupported } from "firebase/messaging";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db, getFirebaseMessaging } from "@/lib/firebase";
+import { normalizeVapidKey } from "@/lib/fcmVapid";
 
-export type ToastNotification = {
-  id: string;
-  title: string;
-  body: string;
-  type?: "text" | "image" | "video" | "audio" | "call";
-};
+const VAPID_KEY_RAW = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
 
-const VAPID_KEY = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
-const API_BASE = import.meta.env.BASE_URL?.replace(/\/$/, "") || "";
-
+/**
+ * FCM web push: foreground via onMessage; background via `public/firebase-messaging-sw.js`.
+ * Token is stored on `users/{userId}` for Cloud Functions (`functions/`) to send pushes when the app is closed.
+ */
 export function useNotifications(enabled: boolean, userId?: string | null) {
-  const [toasts, setToasts] = useState<ToastNotification[]>([]);
-  const swRegisteredRef = useRef(false);
+  const onMessageUnsubRef = useRef<(() => void) | undefined>(undefined);
+  /** Skip duplicate getToken for the same user after first success (e.g. React StrictMode remount). */
+  const tokenRegisteredForUserRef = useRef<string | null>(null);
 
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  const showToast = useCallback((notification: Omit<ToastNotification, "id">) => {
-    const id = `toast_${Date.now()}`;
-    setToasts((prev) => [...prev.slice(-2), { ...notification, id }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5000);
-  }, []);
-
-  // Browser Notification API (tab hidden, browser open)
   const notify = useCallback(
-    (title: string, body: string, type?: ToastNotification["type"]) => {
+    (title: string, body: string) => {
       if (!enabled) return;
-      // Foreground: in-app toast
-      if (!document.hidden) {
-        showToast({ title, body, type });
-        return;
-      }
-      // Background: native notification
       if ("Notification" in window && Notification.permission === "granted") {
         try {
           new Notification(title, {
@@ -44,81 +25,112 @@ export function useNotifications(enabled: boolean, userId?: string | null) {
             icon: "/favicon.svg",
             silent: false,
             tag: "onlytwo",
-            renotify: true,
           });
-        } catch {}
+        } catch {
+          // ignore
+        }
       }
     },
-    [enabled, showToast]
+    [enabled]
   );
 
-  // Request browser notification permission
   useEffect(() => {
-    if (!enabled) return;
-    if (!("Notification" in window)) return;
+    if (!enabled) return undefined;
+    if (!("Notification" in window)) return undefined;
     if (Notification.permission === "default") {
-      Notification.requestPermission().catch(() => {});
+      Notification.requestPermission().catch(() => {
+        console.warn("[notifications] Notification permission request failed or was dismissed.");
+      });
+    }
+    return undefined;
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled || !userId) return undefined;
+    if (!("serviceWorker" in navigator)) return undefined;
+
+    let cancelled = false;
+
+    const registerFcm = async () => {
+      console.log("[VAPID KEY RAW]", import.meta.env.VITE_FIREBASE_VAPID_KEY);
+
+      const vapidKey = normalizeVapidKey(VAPID_KEY_RAW);
+      if (!vapidKey) {
+        console.error("[FCM] Missing VAPID key — set VITE_FIREBASE_VAPID_KEY in project root .env and restart dev server.");
+        return;
+      }
+
+      try {
+        const supported = await isSupported().catch(() => false);
+        if (!supported || cancelled) return;
+
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          console.warn("[FCM] Permission denied");
+          return;
+        }
+
+        const swPath = `${import.meta.env.BASE_URL.replace(/\/?$/, "/")}firebase-messaging-sw.js`;
+        const registration = await navigator.serviceWorker.register(swPath);
+        await navigator.serviceWorker.ready;
+
+        if (cancelled) return;
+
+        const messaging = getFirebaseMessaging();
+        if (!messaging) {
+          console.warn("[notifications] Firebase Messaging not available in this browser.");
+          return;
+        }
+
+        if (tokenRegisteredForUserRef.current !== userId) {
+          const token = await getToken(messaging, {
+            vapidKey,
+            serviceWorkerRegistration: registration,
+          });
+          console.log("[FCM TOKEN]", token);
+
+          try {
+            await setDoc(
+              doc(db, "users", userId),
+              { fcmToken: token, fcmTokenUpdatedAt: serverTimestamp() },
+              { merge: true }
+            );
+          } catch (persistErr) {
+            console.error("[FCM] Failed to save token to Firestore", persistErr);
+          }
+
+          tokenRegisteredForUserRef.current = userId;
+        } else {
+          console.log("[FCM] Skipping duplicate getToken for this user");
+        }
+
+        if (cancelled) return;
+
+        onMessageUnsubRef.current = onMessage(messaging, (payload) => {
+          console.log("[FCM FOREGROUND]", payload);
+          const { title, body } = payload.notification ?? {};
+          if (title && body) notify(title, body);
+        });
+      } catch (err) {
+        console.error("[FCM] setup error", err);
+        console.warn("[notifications] Service worker / FCM setup failed:", err);
+      }
+    };
+
+    void registerFcm();
+
+    return () => {
+      cancelled = true;
+      onMessageUnsubRef.current?.();
+      onMessageUnsubRef.current = undefined;
+    };
+  }, [enabled, userId, notify]);
+
+  useEffect(() => {
+    if (!enabled) {
+      tokenRegisteredForUserRef.current = null;
     }
   }, [enabled]);
 
-  // Register service worker + FCM
-  useEffect(() => {
-    if (!enabled || !userId || swRegisteredRef.current) return;
-    if (!("serviceWorker" in navigator)) return;
-    swRegisteredRef.current = true;
-
-    const registerSW = async () => {
-      try {
-        const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-
-        // Send firebase config to SW
-        const { firebaseConfig } = await import("@/lib/firebase");
-        const sw = reg.installing || reg.waiting || reg.active;
-        sw?.postMessage({ type: "FIREBASE_CONFIG", config: firebaseConfig });
-
-        // Get FCM token
-        if (!VAPID_KEY) return;
-        const messaging = getFirebaseMessaging();
-        if (!messaging) return;
-
-        const token = await getToken(messaging, {
-          vapidKey: VAPID_KEY,
-          serviceWorkerRegistration: reg,
-        });
-
-        if (token && userId) {
-          await set(ref(rtdb, `fcmTokens/${userId}`), token).catch(() => {});
-        }
-
-        // Listen for foreground FCM messages
-        onMessage(messaging, (payload) => {
-          const { title, body } = payload.notification ?? {};
-          if (title && body) showToast({ title, body });
-        });
-      } catch {}
-    };
-
-    registerSW();
-  }, [enabled, userId, showToast]);
-
-  return { notify, toasts, showToast, dismissToast };
-}
-
-// Push notification via API server (fire and forget)
-export async function sendPushNotification(params: {
-  toUserId: string;
-  title: string;
-  body: string;
-}) {
-  try {
-    const tokenSnap = await get(ref(rtdb, `fcmTokens/${params.toUserId}`));
-    const token = tokenSnap.val() as string | null;
-    if (!token) return;
-
-    await fetch(`${API_BASE}/api/notify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, title: params.title, body: params.body }),
-    });
-  } catch {}
+  return { notify };
 }

@@ -32,7 +32,6 @@ export function useProfile(userId: string | null) {
   const [profile, setProfile] = useState<UserProfile>({ dpUrl: null, dpHash: null });
   const [allProfiles, setAllProfiles] = useState<Record<string, UserProfile>>({});
   const [uploading, setUploading] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -46,14 +45,9 @@ export function useProfile(userId: string | null) {
       }, () => {});
       return () => unsub();
     } catch {
-      // RTDB unavailable
+      return undefined;
     }
   }, [userId]);
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3000);
-  };
 
   const uploadDp = useCallback(
     async (file: File) => {
@@ -62,16 +56,13 @@ export function useProfile(userId: string | null) {
       try {
         const hash = await hashFile(file);
         if (profile.dpHash === hash) {
-          showToast("This image is already used");
           return;
         }
         const url = await uploadToCloudinary(file);
         const newProfile: UserProfile = { dpUrl: url, dpHash: hash };
         await set(ref(rtdb, `profiles/${userId}`), newProfile);
         setProfile(newProfile);
-        showToast("Profile picture updated");
       } catch {
-        showToast("Upload failed — try again");
       } finally {
         setUploading(false);
       }
@@ -90,11 +81,9 @@ export function useProfile(userId: string | null) {
       const cleared: UserProfile = { dpUrl: null, dpHash: null };
       await set(ref(rtdb, `profiles/${userId}`), cleared);
       setProfile(cleared);
-      showToast("Profile picture removed");
     } catch {
-      showToast("Failed to remove — try again");
     }
   }, [userId]);
 
-  return { profile, uploading, toast, uploadDp, deleteDp, getDpUrl };
+  return { profile, uploading, uploadDp, deleteDp, getDpUrl };
 }

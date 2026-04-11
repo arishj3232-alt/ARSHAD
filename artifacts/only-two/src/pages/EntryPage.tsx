@@ -1,24 +1,74 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Heart, Lock, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { onValue, ref } from "firebase/database";
+import { rtdb } from "@/lib/firebase";
 
 type Props = {
-  onJoin: (code: string, name: string) => void;
+  onJoin: (payload: { role: "shelly" | "arshad"; name: string; roomCode: string }) => void;
   error: string;
   blocked?: boolean;
 };
 
 export default function EntryPage({ onJoin, error, blocked }: Props) {
   const [code, setCode] = useState("");
-  const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [shake, setShake] = useState(false);
+  const [role, setRole] = useState<"shelly" | "arshad" | null>(null);
+  const [roleError, setRoleError] = useState("");
+  const [takenRoles, setTakenRoles] = useState<{ shelly: boolean; arshad: boolean }>({
+    shelly: false,
+    arshad: false,
+  });
+  const [takenAnim, setTakenAnim] = useState<{ shelly: boolean; arshad: boolean }>({
+    shelly: false,
+    arshad: false,
+  });
+
+  useEffect(() => {
+    const normalizedRoom = code.trim();
+    if (!normalizedRoom) {
+      setTakenRoles({ shelly: false, arshad: false });
+      return undefined;
+    }
+    const rolesRef = ref(rtdb, `rooms/${normalizedRoom}/roles`);
+    const unsub = onValue(rolesRef, (snap) => {
+      const data = (snap.val() ?? {}) as Record<string, unknown>;
+      const nextTaken = {
+        shelly: !!data.shelly,
+        arshad: !!data.arshad,
+      };
+      setTakenRoles((prev) => {
+        (["shelly", "arshad"] as const).forEach((k) => {
+          if (!prev[k] && nextTaken[k]) {
+            setTakenAnim((a) => ({ ...a, [k]: true }));
+            setTimeout(() => {
+              setTakenAnim((a) => ({ ...a, [k]: false }));
+            }, 260);
+          }
+        });
+        return nextTaken;
+      });
+      setRole((prev) => {
+        if (!prev) return prev;
+        if (prev === "shelly" && data.shelly) return null;
+        if (prev === "arshad" && data.arshad) return null;
+        return prev;
+      });
+    });
+    return () => unsub();
+  }, [code]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!code.trim() || !name.trim() || loading) return;
+    if (!code.trim() || loading) return;
+    if (!role) {
+      setRoleError("Please select a role");
+      return;
+    }
+    setRoleError("");
     setLoading(true);
-    await onJoin(code, name);
+    await onJoin({ role, name: role === "shelly" ? "Shelly" : "Arshad", roomCode: code });
     setLoading(false);
     if (error) {
       setShake(true);
@@ -75,17 +125,41 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="text-white/40 text-[10px] uppercase tracking-widest mb-2 block">
-                  Your Name
+                  Select Role
                 </label>
-                <input
-                  data-testid="input-name"
-                  className="w-full bg-white/5 border border-white/8 rounded-2xl px-4 py-3.5 text-white placeholder-white/20 focus:outline-none focus:border-pink-500/60 focus:bg-white/7 transition-all text-sm"
-                  placeholder="Enter your name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  autoComplete="off"
-                  autoCapitalize="words"
-                />
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => { if (!takenRoles.shelly) { setRole("shelly"); setRoleError(""); } }}
+                    disabled={takenRoles.shelly}
+                    className={cn(
+                      "flex-1 py-3 rounded-xl border transition transform hover:scale-105 active:scale-95",
+                      takenRoles.shelly && "opacity-50 cursor-not-allowed hover:scale-100 active:scale-100",
+                      takenAnim.shelly && "scale-95",
+                      role === "shelly"
+                        ? "bg-pink-500 text-white border-pink-500 shadow-lg shadow-pink-500/30"
+                        : "bg-gray-900 text-gray-300 border-gray-700"
+                    )}
+                  >
+                    💖 Shelly {takenRoles.shelly ? "• Taken" : ""}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { if (!takenRoles.arshad) { setRole("arshad"); setRoleError(""); } }}
+                    disabled={takenRoles.arshad}
+                    className={cn(
+                      "flex-1 py-3 rounded-xl border transition transform hover:scale-105 active:scale-95",
+                      takenRoles.arshad && "opacity-50 cursor-not-allowed hover:scale-100 active:scale-100",
+                      takenAnim.arshad && "scale-95",
+                      role === "arshad"
+                        ? "bg-blue-500 text-white border-blue-500 shadow-lg shadow-blue-500/30"
+                        : "bg-gray-900 text-gray-300 border-gray-700"
+                    )}
+                  >
+                    🔥 Arshad {takenRoles.arshad ? "• Taken" : ""}
+                  </button>
+                </div>
+                {!role && roleError && <p className="text-red-400 text-sm mt-2">{roleError}</p>}
               </div>
 
               <div>
@@ -116,8 +190,8 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
               <button
                 data-testid="button-enter"
                 type="submit"
-                disabled={loading || !name.trim() || !code.trim()}
-                className="w-full bg-gradient-to-r from-pink-500 to-violet-600 text-white font-semibold py-3.5 rounded-2xl hover:opacity-90 active:scale-[0.98] transition-all shadow-lg shadow-pink-500/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-1"
+                disabled={loading || !code.trim() || !role}
+                className="w-full bg-gradient-to-r from-pink-500 to-violet-600 text-white font-semibold py-3.5 rounded-2xl hover:opacity-90 hover:scale-105 active:scale-95 transition-all shadow-lg shadow-pink-500/25 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center justify-center gap-2 mt-1"
               >
                 {loading ? (
                   <>

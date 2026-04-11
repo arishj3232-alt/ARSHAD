@@ -47,3 +47,18 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+# Vendored Semgrep rules (large; may trip GitHub push protection on example URLs)
+.config/replit/
+
+# FCM: generated from VITE_* in artifacts/only-two (vite.config.ts); do not commit (contains project config).
+artifacts/only-two/public/firebase-messaging-sw.js
+
+# Local env (secrets)
+artifacts/only-two/.env.local
+artifacts/only-two/.env.production
+
+# Archives
+*.zip
+
+# Cloud Functions build output (rebuilt by `npm run build` in functions/)
+functions/lib

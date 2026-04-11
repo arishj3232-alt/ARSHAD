@@ -3,11 +3,12 @@ import {
   doc,
   setDoc,
   updateDoc,
+  deleteDoc,
   collection,
   getDocs,
   onSnapshot,
 } from "firebase/firestore";
-import { ref, set, onDisconnect, onValue, get } from "firebase/database";
+import { ref, set, onDisconnect, onValue, get, serverTimestamp, remove, runTransaction, update as rtdbUpdate } from "firebase/database";
 import { db, rtdb } from "@/lib/firebase";
 
 const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
@@ -30,14 +31,23 @@ export type SessionState =
   | { status: "idle" }
   | { status: "blocked" }
   | { status: "joining" }
-  | { status: "active"; user: SessionUser; otherId: string | null };
+  | { status: "active"; user: SessionUser; otherId: string | null; roomCode: string };
 
-function generateUserId(): string {
-  const existing = localStorage.getItem("onlytwo-user-id");
-  if (existing) return existing;
-  const id = `user_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  localStorage.setItem("onlytwo-user-id", id);
-  return id;
+export type SessionRole = "shelly" | "arshad";
+
+type RoleIdentity = {
+  role: SessionRole;
+  userName: "Shelly" | "Arshad";
+};
+
+function resolveRoleIdentity(role: SessionRole): RoleIdentity {
+  if (role === "shelly") {
+    return { role: "shelly", userName: "Shelly" };
+  }
+  if (role === "arshad") {
+    return { role: "arshad", userName: "Arshad" };
+  }
+  throw new Error("Invalid role");
 }
 
 async function getAdminRoomCode(): Promise<string> {
@@ -51,16 +61,16 @@ async function getAdminRoomCode(): Promise<string> {
 }
 
 /** Soft disconnect — keeps doc alive so the other user sees "last seen" */
-async function markOffline(userId: string): Promise<void> {
+async function markOffline(roomCode: string, userId: string): Promise<void> {
   const now = Date.now();
   try {
-    await updateDoc(doc(db, "rooms", "main", "presence", userId), {
+    await updateDoc(doc(db, "rooms", roomCode, "presence", userId), {
       online: false,
       lastSeenTs: now,
     });
   } catch {}
   try {
-    await set(ref(rtdb, `status/${userId}`), { status: "offline", ts: now });
+    await set(ref(rtdb, `status/${roomCode}/${userId}`), { status: "offline", ts: now });
   } catch {}
 }
 
@@ -69,24 +79,145 @@ async function markOffline(userId: string): Promise<void> {
 export function useSession() {
   const [state, setState] = useState<SessionState>({ status: "idle" });
   const [codeError, setCodeError] = useState("");
+  const [isRecoveringSession, setIsRecoveringSession] = useState(true);
 
   // Stable refs for cleanup — survive re-renders without stale closures
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unloadHandlerRef = useRef<(() => void) | null>(null);
   const activeUserIdRef = useRef<string | null>(null);
+  const statusDisconnectRef = useRef<{ cancel: () => void } | null>(null);
+  const roleDisconnectRef = useRef<{ cancel: () => Promise<void> } | null>(null);
+  const activeRoleRef = useRef<string | null>(null);
+  const activeRoomCodeRef = useRef<string | null>(null);
+
+  const armOnlineLifecycle = useCallback((roomCode: string, userId: string, userName: string, role: SessionRole) => {
+    const now = Date.now();
+    const roleRef = ref(rtdb, `rooms/${roomCode}/roles/${role}`);
+
+    roleDisconnectRef.current?.cancel().catch(() => {});
+    const roleDisconnectHandle = onDisconnect(roleRef);
+    roleDisconnectHandle.remove().catch(() => {});
+    roleDisconnectRef.current = roleDisconnectHandle;
+    activeRoleRef.current = role;
+
+    statusDisconnectRef.current?.cancel();
+    const rtdbRef = ref(rtdb, `status/${roomCode}/${userId}`);
+    set(rtdbRef, { status: "online", ts: now }).catch(() => {});
+    const disconnectHandle = onDisconnect(rtdbRef);
+    disconnectHandle.set({ status: "offline", ts: serverTimestamp() }).catch(() => {});
+    statusDisconnectRef.current = disconnectHandle;
+
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = setInterval(() => {
+      setDoc(doc(db, "rooms", roomCode, "presence", userId), { online: true, lastSeenTs: Date.now() }, { merge: true }).catch(() => {});
+      set(rtdbRef, { status: "online", ts: Date.now() }).catch(() => {});
+    }, HEARTBEAT_MS);
+
+    if (unloadHandlerRef.current) window.removeEventListener("beforeunload", unloadHandlerRef.current);
+    const handleUnload = () => {
+      updateDoc(doc(db, "rooms", roomCode, "presence", userId), { online: false, lastSeenTs: Date.now() }).catch(() => {});
+      set(rtdbRef, { status: "offline", ts: Date.now() }).catch(() => {});
+    };
+    unloadHandlerRef.current = handleUnload;
+    window.addEventListener("beforeunload", handleUnload);
+
+    activeUserIdRef.current = userId;
+    activeRoomCodeRef.current = roomCode;
+    setState({
+      status: "active",
+      user: { id: userId, name: userName, joinedAt: new Date(), online: true, lastSeen: null },
+      otherId: null,
+      roomCode,
+    });
+  }, []);
 
   // Clean up on component unmount (e.g. hot reload, app teardown)
   useEffect(() => {
     return () => {
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);
       if (unloadHandlerRef.current) window.removeEventListener("beforeunload", unloadHandlerRef.current);
-      if (activeUserIdRef.current) markOffline(activeUserIdRef.current);
+      statusDisconnectRef.current?.cancel();
+      statusDisconnectRef.current = null;
+      roleDisconnectRef.current?.cancel().catch(() => {});
+      roleDisconnectRef.current = null;
+      if (activeUserIdRef.current && activeRoomCodeRef.current) {
+        markOffline(activeRoomCodeRef.current, activeUserIdRef.current);
+      }
+      if (activeRoleRef.current && activeRoomCodeRef.current) {
+        remove(ref(rtdb, `rooms/${activeRoomCodeRef.current}/roles/${activeRoleRef.current}`)).catch(() => {});
+      }
     };
   }, []);
 
-  const joinRoom = useCallback(async (code: string, name: string) => {
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const withTimeout = <T,>(p: Promise<T>, ms: number) =>
+        Promise.race<T | "timeout">([
+          p,
+          new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), ms)),
+        ]);
+
+      const storedUserId = sessionStorage.getItem("onlytwo-user-id");
+      const storedRoleRaw = sessionStorage.getItem("onlytwo-role");
+      const storedRoom = sessionStorage.getItem("onlytwo-room");
+      if (!storedUserId || !storedRoleRaw || !storedRoom) {
+        if (!cancelled) setIsRecoveringSession(false);
+        return;
+      }
+      if (storedRoleRaw !== "shelly" && storedRoleRaw !== "arshad") {
+        sessionStorage.clear();
+        if (!cancelled) setIsRecoveringSession(false);
+        return;
+      }
+      const storedRole = storedRoleRaw as SessionRole;
+      try {
+        const roleRef = ref(rtdb, `rooms/${storedRoom}/roles/${storedRole}`);
+        const snapOrTimeout = await withTimeout(get(roleRef), 3000);
+        if (snapOrTimeout === "timeout") {
+          sessionStorage.clear();
+          if (!cancelled) setIsRecoveringSession(false);
+          return;
+        }
+        const snap = snapOrTimeout;
+        const val = snap.val() as { userId?: string; userName?: string } | string | null;
+        const ownerId = typeof val === "string" ? val : val?.userId;
+        if (ownerId !== storedUserId) {
+          sessionStorage.clear();
+          if (!cancelled) setIsRecoveringSession(false);
+          return;
+        }
+        const fallbackName = storedRole === "shelly" ? "Shelly" : "Arshad";
+        const userName = sessionStorage.getItem("onlytwo-user-name") ?? (typeof val === "object" && val?.userName ? val.userName : fallbackName);
+        sessionStorage.setItem("onlytwo-user-name", userName);
+        if (!cancelled) {
+          armOnlineLifecycle(storedRoom, storedUserId, userName, storedRole);
+          setIsRecoveringSession(false);
+        }
+      } catch {
+        sessionStorage.clear();
+        if (!cancelled) setIsRecoveringSession(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [armOnlineLifecycle]);
+
+  const joinRoom = useCallback(async ({
+    role,
+    name,
+    roomCode,
+  }: {
+    role: SessionRole;
+    name: string;
+    roomCode: string;
+  }) => {
+    void name;
+    const normalizedRoomCode = roomCode.trim();
     const validCode = await getAdminRoomCode();
-    if (code.trim() !== validCode.trim()) {
+    if (normalizedRoomCode !== validCode.trim()) {
       setCodeError("Wrong room code. This space is only for two.");
       return;
     }
@@ -94,8 +225,14 @@ export function useSession() {
     setCodeError("");
     setState({ status: "joining" });
 
-    const userId = generateUserId();
-    localStorage.setItem("onlytwo-user-name", name.trim());
+    const roleIdentity = resolveRoleIdentity(role);
+    const userId = `${normalizedRoomCode}_${roleIdentity.role}`;
+    const resolvedName = roleIdentity.userName;
+    const selectedRole = roleIdentity.role;
+    sessionStorage.setItem("onlytwo-user-id", userId);
+    sessionStorage.setItem("onlytwo-user-name", resolvedName);
+    sessionStorage.setItem("onlytwo-role", selectedRole);
+    sessionStorage.setItem("onlytwo-room", normalizedRoomCode);
 
     try {
       // Small settle delay: let any in-progress reconnect / onDisconnect handlers
@@ -111,7 +248,7 @@ export function useSession() {
       //
       // ACTIVE_MS = 45 s covers 1 missed heartbeat (25 s) plus generous network
       // latency, so a briefly-reconnecting user is never counted twice.
-      const presenceCol = collection(db, "rooms", "main", "presence");
+      const presenceCol = collection(db, "rooms", normalizedRoomCode, "presence");
       const presenceSnap = await getDocs(presenceCol);
       const now = Date.now();
 
@@ -127,50 +264,53 @@ export function useSession() {
         return;
       }
 
+      // Strict role lock: only one active tab per role.
+      const rolesRootRef = ref(rtdb, `rooms/${normalizedRoomCode}/roles`);
+      const rolesSnap = await get(rolesRootRef);
+      const rolesData = (rolesSnap.val() ?? {}) as Record<string, unknown>;
+      if (Object.keys(rolesData).length > 2) {
+        setCodeError("Room roles are corrupted. Please try again.");
+        setState({ status: "blocked" });
+        return;
+      }
+      if (Object.keys(rolesData).length >= 2 && !rolesData[selectedRole]) {
+        setCodeError("Room is full (both roles already in use).");
+        setState({ status: "blocked" });
+        return;
+      }
+
+      const roleRef = ref(rtdb, `rooms/${normalizedRoomCode}/roles/${selectedRole}`);
+      const txResult = await runTransaction(roleRef, (current) => {
+        if (current) return;
+        return { userId, userName: resolvedName, at: Date.now() };
+      });
+      if (!txResult.committed) {
+        setCodeError("Role already taken in this room");
+        setState({ status: "blocked" });
+        return;
+      }
       // Write own presence doc (merge to preserve any extra fields)
       await setDoc(
-        doc(db, "rooms", "main", "presence", userId),
-        { id: userId, name: name.trim(), online: true, lastSeenTs: now },
+        doc(db, "rooms", normalizedRoomCode, "presence", userId),
+        { id: userId, name: resolvedName, online: true, lastSeenTs: now },
         { merge: true }
       );
-
-      // RTDB presence + server-side onDisconnect
-      const rtdbRef = ref(rtdb, `status/${userId}`);
-      await set(rtdbRef, { status: "online", ts: now }).catch(() => {});
-      onDisconnect(rtdbRef).set({ status: "offline", ts: Date.now() }).catch(() => {});
-
-      // Clear any stale heartbeat before starting a new one
-      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-      heartbeatRef.current = setInterval(() => {
-        setDoc(doc(db, "rooms", "main", "presence", userId), { online: true, lastSeenTs: Date.now() }, { merge: true }).catch(() => {});
-        set(rtdbRef, { status: "online", ts: Date.now() }).catch(() => {});
-      }, HEARTBEAT_MS);
-
-      // Best-effort soft-disconnect on hard tab close
-      if (unloadHandlerRef.current) window.removeEventListener("beforeunload", unloadHandlerRef.current);
-      const handleUnload = () => {
-        updateDoc(doc(db, "rooms", "main", "presence", userId), { online: false, lastSeenTs: Date.now() }).catch(() => {});
-        set(rtdbRef, { status: "offline", ts: Date.now() }).catch(() => {});
-      };
-      unloadHandlerRef.current = handleUnload;
-      window.addEventListener("beforeunload", handleUnload);
-
-      activeUserIdRef.current = userId;
-
-      setState({
-        status: "active",
-        user: { id: userId, name: name.trim(), joinedAt: new Date(), online: true, lastSeen: null },
-        otherId: null,
-      });
+      armOnlineLifecycle(normalizedRoomCode, userId, resolvedName, selectedRole);
     } catch {
       setState({ status: "idle" });
       setCodeError("Connection failed. Please try again.");
     }
   }, []);
 
-  const leaveRoom = useCallback(() => {
-    if (state.status !== "active") return;
-    const userId = state.user.id;
+  const leaveRoom = useCallback(async () => {
+    const userId = activeUserIdRef.current ?? (state.status === "active" ? state.user.id : sessionStorage.getItem("onlytwo-user-id"));
+    const roomCode = activeRoomCodeRef.current ?? (state.status === "active" ? state.roomCode : sessionStorage.getItem("onlytwo-room"));
+    const role = activeRoleRef.current ?? sessionStorage.getItem("onlytwo-role");
+    if (!userId || !roomCode || !role) {
+      sessionStorage.clear();
+      setState({ status: "idle" });
+      return;
+    }
 
     // Stop heartbeat
     if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
@@ -180,58 +320,74 @@ export function useSession() {
       unloadHandlerRef.current = null;
     }
 
-    // Soft disconnect — update lastSeen, keep doc alive
-    markOffline(userId);
+    statusDisconnectRef.current?.cancel();
+    statusDisconnectRef.current = null;
+    roleDisconnectRef.current?.cancel().catch(() => {});
+    roleDisconnectRef.current = null;
+    const updates: Record<string, null> = {};
+    updates[`rooms/${roomCode}/roles/${role}`] = null;
+    updates[`status/${roomCode}/${userId}`] = null;
+    updates[`cursors/${roomCode}/${userId}`] = null;
+    updates[`typing/${roomCode}/${userId}`] = null;
+    updates[`devices/${roomCode}/${userId}`] = null;
+    await rtdbUpdate(ref(rtdb), updates).catch(() => {});
+    await deleteDoc(doc(db, "rooms", roomCode, "presence", userId)).catch(() => {});
 
-    localStorage.removeItem("onlytwo-user-id");
+    sessionStorage.clear();
     activeUserIdRef.current = null;
+    activeRoomCodeRef.current = null;
+    activeRoleRef.current = null;
     setState({ status: "idle" });
   }, [state]);
 
-  return { state, codeError, joinRoom, leaveRoom };
+  return { state, codeError, joinRoom, leaveRoom, isRecoveringSession };
 }
 
 // ─── usePresence (with 150ms debounce) ───────────────────────────────────────
 
-export function usePresence(_currentUserId: string | null) {
+export function usePresence(_currentUserId: string | null, roomCode: string | null) {
   const [presence, setPresence] = useState<Record<string, SessionUser>>({});
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<Record<string, SessionUser>>({});
 
   useEffect(() => {
-    const presenceCol = collection(db, "rooms", "main", "presence");
+    if (!roomCode) return undefined;
+    try {
+      const presenceCol = collection(db, "rooms", roomCode, "presence");
 
-    const unsub = onSnapshot(presenceCol, (snap) => {
-      const users: Record<string, SessionUser> = {};
-      const now = Date.now();
+      const unsub = onSnapshot(presenceCol, (snap) => {
+        const users: Record<string, SessionUser> = {};
+        const now = Date.now();
 
-      snap.docs.forEach((d) => {
-        const data = d.data();
-        const ts: number = data.lastSeenTs ?? 0;
-        const isStale = now - ts > STALE_MS;
-        users[d.id] = {
-          id: d.id,
-          name: (data.name as string) ?? "Unknown",
-          joinedAt: null,
-          online: !isStale && (data.online === true),
-          lastSeen: ts ? new Date(ts) : null,
-        };
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          const ts: number = data.lastSeenTs ?? 0;
+          const isStale = now - ts > STALE_MS;
+          users[d.id] = {
+            id: d.id,
+            name: (data.name as string) ?? "Unknown",
+            joinedAt: null,
+            online: !isStale && (data.online === true),
+            lastSeen: ts ? new Date(ts) : null,
+          };
+        });
+
+        pendingRef.current = users;
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(
+          () => setPresence({ ...pendingRef.current }),
+          PRESENCE_DEBOUNCE_MS
+        );
       });
 
-      // Debounce: batch rapid Firestore snapshots to prevent UI flicker
-      pendingRef.current = users;
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(
-        () => setPresence({ ...pendingRef.current }),
-        PRESENCE_DEBOUNCE_MS
-      );
-    });
-
-    return () => {
-      unsub();
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, []); // stable — presenceCol path never changes
+      return () => {
+        unsub();
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+      };
+    } catch {
+      return undefined;
+    }
+  }, [roomCode]);
 
   return presence;
 }
@@ -253,39 +409,4 @@ export function useNetworkStatus() {
   }, []);
 
   return { isConnected, wasDisconnected };
-}
-
-// ─── useTypingIndicator ───────────────────────────────────────────────────────
-
-export function useTypingIndicator(roomId: string, userId: string | null) {
-  const [isOtherTyping, setIsOtherTyping] = useState(false);
-
-  const setTyping = useCallback(
-    (typing: boolean) => {
-      if (!userId) return;
-      try {
-        set(ref(rtdb, `typing/${roomId}/${userId}`), typing ? true : null).catch(() => {});
-      } catch {}
-    },
-    [roomId, userId]
-  );
-
-  useEffect(() => {
-    if (!roomId) return;
-    try {
-      const unsub = onValue(
-        ref(rtdb, `typing/${roomId}`),
-        (snap) => {
-          const data = snap.val() as Record<string, boolean> | null;
-          if (!data || !userId) { setIsOtherTyping(false); return; }
-          const others = Object.entries(data).filter(([uid, val]) => uid !== userId && val === true);
-          setIsOtherTyping(others.length > 0);
-        },
-        () => {}
-      );
-      return () => unsub();
-    } catch {}
-  }, [roomId, userId]);
-
-  return { isOtherTyping, setTyping };
 }

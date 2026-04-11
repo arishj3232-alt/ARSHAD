@@ -10,6 +10,7 @@ type Props = {
   onUpdate: <K extends keyof AdminSettings>(key: K, value: AdminSettings[K]) => void;
   onClose: () => void;
   currentUserId?: string;
+  roomCode?: string;
 };
 
 type ToggleRow = { key: keyof AdminSettings; label: string };
@@ -29,7 +30,8 @@ const boolGroups: { title: string; rows: ToggleRow[] }[] = [
       { key: "imageUploadEnabled", label: "Image upload" },
       { key: "videoUploadEnabled", label: "Video upload" },
       { key: "viewOnceEnabled", label: "View-once" },
-      { key: "videoNotesEnabled", label: "Video notes" },
+      { key: "videoNoteEnabled", label: "Video notes" },
+      { key: "imageDownloadProtection", label: "Image download protection" },
     ],
   },
   { title: "Voice", rows: [{ key: "voiceMessagesEnabled", label: "Voice messages" }] },
@@ -37,7 +39,7 @@ const boolGroups: { title: string; rows: ToggleRow[] }[] = [
     title: "Calls",
     rows: [
       { key: "voiceCallsEnabled", label: "Voice calls" },
-      { key: "videoCallsEnabled", label: "Video calls" },
+      { key: "videoCallEnabled", label: "Video calls" },
     ],
   },
   {
@@ -82,26 +84,30 @@ const PRESET_EMOJIS = ["❤️", "😂", "👍", "😮", "🔥", "😢", "😡",
 
 type DeviceInfo = { browser: string; platform: string; lastActive: number; online: boolean; userId?: string };
 
-function DevicesPanel({ currentUserId }: { currentUserId?: string }) {
+function DevicesPanel({ currentUserId, roomCode }: { currentUserId?: string; roomCode?: string }) {
   const [devices, setDevices] = useState<Record<string, Record<string, DeviceInfo>>>({});
   const [removing, setRemoving] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!roomCode) return undefined;
     try {
-      const unsub = onValue(ref(rtdb, "devices"), (snap) => {
+      const unsub = onValue(ref(rtdb, `devices/${roomCode}`), (snap) => {
         setDevices((snap.val() as typeof devices) ?? {});
       }, () => {});
       return () => unsub();
-    } catch {}
-  }, []);
+    } catch {
+      return undefined;
+    }
+  }, [roomCode]);
 
   const forceLogout = async (targetUserId: string) => {
     if (targetUserId === currentUserId) return; // can't kick yourself
+    if (!roomCode) return;
     setRemoving(targetUserId);
     try {
-      await set(ref(rtdb, `forceLogout/${targetUserId}`), true);
+      await set(ref(rtdb, `forceLogout/${roomCode}/${targetUserId}`), true);
       // Remove their device entries
-      await set(ref(rtdb, `devices/${targetUserId}`), null);
+      await set(ref(rtdb, `devices/${roomCode}/${targetUserId}`), null);
     } catch {}
     setTimeout(() => setRemoving(null), 1500);
   };
@@ -169,7 +175,7 @@ function buildOffPattern(keyword: string): string {
   return "off" + keyword.slice(0, 2).toLowerCase();
 }
 
-export default function AdminPanel({ settings, onUpdate, onClose, currentUserId }: Props) {
+export default function AdminPanel({ settings, onUpdate, onClose, currentUserId, roomCode }: Props) {
   const [tab, setTab] = useState<"features" | "keywords" | "reactions" | "texts" | "devices">("features");
   const [emojiInput, setEmojiInput] = useState(settings.reactionEmojis.join(" "));
 
@@ -250,6 +256,26 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId 
                   </div>
                 </div>
               ))}
+
+              <div>
+                <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">View-once Timer</p>
+                <div className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
+                  <p className="text-white/40 text-xs mb-1.5">Seconds (1 - 300), applies live</p>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-pink-500/50 transition"
+                    value={settings.viewOnceTimerSeconds}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (!Number.isFinite(n)) return;
+                      const clamped = Math.min(300, Math.max(1, Math.floor(n)));
+                      onUpdate("viewOnceTimerSeconds", clamped);
+                    }}
+                  />
+                </div>
+              </div>
 
               <div>
                 <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Reply Mode</p>
@@ -354,7 +380,7 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId 
             </div>
           )}
 
-          {tab === "devices" && <DevicesPanel currentUserId={currentUserId} />}
+          {tab === "devices" && <DevicesPanel currentUserId={currentUserId} roomCode={roomCode} />}
 
           <div className="h-2" />
         </div>

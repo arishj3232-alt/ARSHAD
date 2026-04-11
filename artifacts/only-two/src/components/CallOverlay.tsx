@@ -27,6 +27,9 @@ type Props = {
   localVideoRef: React.RefObject<HTMLVideoElement | null>;
   remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
   remoteAudioRef: React.RefObject<HTMLAudioElement | null>;
+  connectionError?: string | null;
+  onDismissConnectionError?: () => void;
+  onRetry?: () => void;
   onEnd: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
@@ -47,6 +50,9 @@ export default function CallOverlay({
   localVideoRef,
   remoteVideoRef,
   remoteAudioRef,
+  connectionError,
+  onDismissConnectionError,
+  onRetry,
   onEnd,
   onToggleMute,
   onToggleCamera,
@@ -111,6 +117,15 @@ export default function CallOverlay({
 
   if (callStatus === "idle") return null;
 
+  const minimizedStatusLabel =
+    callStatus === "calling" || callStatus === "connecting" || callStatus === "reconnecting"
+      ? callStatus === "calling"
+        ? "Calling…"
+        : callStatus === "reconnecting"
+          ? "Reconnecting…"
+          : "Connecting…"
+      : formatCallDuration(callDuration);
+
   return (
     <>
       {callStatus === "incoming" && (
@@ -159,8 +174,34 @@ export default function CallOverlay({
         </div>
       )}
 
-      {(callStatus === "calling" || callStatus === "connected") && (
+      {(callStatus === "calling" ||
+        callStatus === "connecting" ||
+        callStatus === "reconnecting" ||
+        callStatus === "connected") && (
         <>
+          {connectionError && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] max-w-md px-4 py-3 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-100 text-sm flex items-start gap-3 shadow-xl backdrop-blur-xl">
+              <span className="flex-1">{connectionError}</span>
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="text-amber-100/90 hover:text-amber-100 text-xs shrink-0"
+                >
+                  Retry
+                </button>
+              )}
+              {onDismissConnectionError && (
+                <button
+                  type="button"
+                  onClick={onDismissConnectionError}
+                  className="text-amber-200/70 hover:text-amber-100 text-xs shrink-0"
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
+          )}
           {isMinimized ? (
             <div
               className="fixed z-50 w-44 rounded-2xl overflow-hidden shadow-2xl cursor-grab active:cursor-grabbing bg-black border border-white/10 select-none"
@@ -179,15 +220,11 @@ export default function CallOverlay({
               ) : (
                 <div className="w-full h-16 bg-gradient-to-br from-pink-900/80 to-violet-900/80 flex items-center justify-center gap-2">
                   <Phone className="w-4 h-4 text-white/40" />
-                  <span className="text-white/50 text-xs font-mono">
-                    {formatCallDuration(callDuration)}
-                  </span>
+                  <span className="text-white/50 text-xs font-mono">{minimizedStatusLabel}</span>
                 </div>
               )}
               <div className="bg-black/90 px-2.5 py-2 flex items-center justify-between gap-1">
-                <span className="text-white text-xs font-mono">
-                  {formatCallDuration(callDuration)}
-                </span>
+                <span className="text-white text-xs font-mono">{minimizedStatusLabel}</span>
                 <div className="flex gap-1">
                   <button
                     onClick={() => setIsMinimized(false)}
@@ -232,10 +269,12 @@ export default function CallOverlay({
                       className="w-full h-full object-cover"
                     />
                   </div>
-                  {callStatus === "calling" && (
+                  {(callStatus === "calling" || callStatus === "connecting" || callStatus === "reconnecting") && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                       <div className="text-center">
-                        <p className="text-white/60 text-sm mb-2">Calling...</p>
+                        <p className="text-white/60 text-sm mb-2">
+                          {callStatus === "calling" ? "Calling…" : callStatus === "reconnecting" ? "Reconnecting…" : "Connecting…"}
+                        </p>
                         <h2 className="text-white text-2xl font-bold">{otherName}</h2>
                       </div>
                     </div>
@@ -245,7 +284,7 @@ export default function CallOverlay({
                 <div className="flex-1 flex items-center justify-center bg-gradient-to-b from-[#0a0a0f] to-[#150d1f]">
                   <div className="text-center">
                     <div className="relative w-28 h-28 mx-auto mb-6">
-                      {callStatus === "calling" && (
+                      {(callStatus === "calling" || callStatus === "connecting" || callStatus === "reconnecting") && (
                         <div className="absolute inset-0 rounded-full bg-pink-500/20 animate-ping" />
                       )}
                       <div className="w-28 h-28 rounded-full bg-gradient-to-br from-pink-500 to-violet-600 flex items-center justify-center shadow-2xl shadow-pink-500/30">
@@ -254,7 +293,13 @@ export default function CallOverlay({
                     </div>
                     <h2 className="text-white text-2xl font-bold mb-2">{otherName}</h2>
                     <p className="text-white/40 text-sm">
-                      {callStatus === "calling" ? "Calling…" : formatCallDuration(callDuration)}
+                      {callStatus === "calling"
+                        ? "Calling…"
+                        : callStatus === "connecting"
+                          ? "Connecting…"
+                          : callStatus === "reconnecting"
+                            ? "Reconnecting…"
+                          : formatCallDuration(callDuration)}
                     </p>
                   </div>
                 </div>

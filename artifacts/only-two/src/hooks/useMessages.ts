@@ -11,17 +11,24 @@ import {
   serverTimestamp,
   startAfter,
   getDocs,
+  getDoc,
   deleteField,
   DocumentSnapshot,
+  arrayUnion,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
-export type MessageType = "text" | "image" | "video" | "audio";
+export type MessageType = "text" | "image" | "video" | "audio" | "call";
+export type CallMessageStatus = "calling" | "missed" | "declined" | "completed" | "not_picked";
+export type CallMediaType = "audio" | "video";
 
 export type Message = {
   id: string;
   senderId: string;
   type: MessageType;
+  callType?: CallMediaType;
+  callStatus?: CallMessageStatus;
+  duration?: number;
   text?: string;
   mediaUrl?: string;
   originalText?: string;
@@ -34,7 +41,10 @@ export type Message = {
   seen: boolean;
   delivered: boolean;
   viewOnce?: boolean;
-  viewOnceViewed?: boolean;
+  viewOnceViewed?: boolean; // backward compatibility
+  openedBy?: string[];
+  openedAt?: number | null;
+  expiresAt?: number | null;
   ghost?: boolean;
   reactions?: Record<string, string>;
   edited?: boolean;
@@ -62,6 +72,9 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     delivered: (data.delivered as boolean) ?? false,
     viewOnce: (data.viewOnce as boolean) ?? false,
     viewOnceViewed: (data.viewOnceViewed as boolean) ?? false,
+    openedBy: (data.openedBy as string[]) ?? [],
+    openedAt: (data.openedAt as number | null) ?? null,
+    expiresAt: (data.expiresAt as number | null) ?? null,
     ghost: (data.ghost as boolean) ?? false,
     edited: (data.edited as boolean) ?? false,
     reactions: Object.fromEntries(
@@ -69,31 +82,47 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
         ([, v]) => v && typeof v === "string" && v.length > 0
       )
     ),
+    callType: data.callType as CallMediaType | undefined,
+    callStatus: data.callStatus as CallMessageStatus | undefined,
+    duration: typeof data.duration === "number" ? data.duration : undefined,
     createdAt: (data.createdAt as { toDate: () => Date } | null)?.toDate() ?? null,
   };
 }
 
-export function useMessages(roomId: string, currentUserId: string | null) {
+export function useMessages(roomId: string, currentUserId: string | null, viewOnceTimerMs = 15_000) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const oldestDocRef = useRef<DocumentSnapshot | null>(null);
+  /** Older pages loaded via pagination (prepended); not replaced when the live tail snapshot updates. */
+  const olderLoadedRef = useRef<Message[]>([]);
+  const latestWindowRef = useRef<Message[]>([]);
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!roomId) return undefined;
+
+    olderLoadedRef.current = [];
+    latestWindowRef.current = [];
+    oldestDocRef.current = null;
+    setLoading(true);
+    setHasMore(true);
+
     const q = query(
       collection(db, "rooms", roomId, "messages"),
       orderBy("createdAt", "desc"),
       limit(PAGE_SIZE)
     );
+
     const unsub = onSnapshot(q, (snap) => {
       const docs = snap.docs;
       if (docs.length > 0) oldestDocRef.current = docs[docs.length - 1];
-      setMessages(docs.map(mapDoc).reverse());
+      latestWindowRef.current = docs.map(mapDoc).reverse();
+      setMessages([...olderLoadedRef.current, ...latestWindowRef.current]);
       setLoading(false);
       setHasMore(docs.length === PAGE_SIZE);
     });
+
     return () => unsub();
   }, [roomId]);
 
@@ -109,7 +138,9 @@ export function useMessages(roomId: string, currentUserId: string | null) {
     const snap = await getDocs(q);
     if (snap.docs.length > 0) {
       oldestDocRef.current = snap.docs[snap.docs.length - 1];
-      setMessages((prev) => [...snap.docs.map(mapDoc).reverse(), ...prev]);
+      const olderChunk = snap.docs.map(mapDoc).reverse();
+      olderLoadedRef.current = [...olderChunk, ...olderLoadedRef.current];
+      setMessages([...olderLoadedRef.current, ...latestWindowRef.current]);
       setHasMore(snap.docs.length === PAGE_SIZE);
     } else {
       setHasMore(false);
@@ -120,6 +151,9 @@ export function useMessages(roomId: string, currentUserId: string | null) {
   const sendMessage = useCallback(
     async (payload: {
       type: MessageType;
+      callType?: CallMediaType;
+      callStatus?: CallMessageStatus;
+      duration?: number;
       text?: string;
       mediaUrl?: string;
       replyToId?: string;
@@ -131,9 +165,11 @@ export function useMessages(roomId: string, currentUserId: string | null) {
       await addDoc(collection(db, "rooms", roomId, "messages"), {
         senderId: currentUserId,
         type: payload.type,
+        callType: payload.callType ?? null,
+        callStatus: payload.callStatus ?? null,
+        duration: typeof payload.duration === "number" ? payload.duration : null,
         text: payload.text ?? null,
         mediaUrl: payload.mediaUrl ?? null,
-        // Preserve originals for reveal mode
         originalText: payload.text ?? null,
         originalMediaUrl: payload.mediaUrl ?? null,
         replyToId: payload.replyToId ?? null,
@@ -145,6 +181,9 @@ export function useMessages(roomId: string, currentUserId: string | null) {
         delivered: true,
         viewOnce: payload.viewOnce ?? false,
         viewOnceViewed: false,
+        openedBy: [],
+        openedAt: null,
+        expiresAt: null,
         ghost: payload.ghost ?? false,
         edited: false,
         reactions: {},
@@ -175,7 +214,6 @@ export function useMessages(roomId: string, currentUserId: string | null) {
   const deleteForEveryone = useCallback(
     async (messageId: string, deletedText = "This message was deleted") => {
       const r = doc(db, "rooms", roomId, "messages", messageId);
-      // originalText and originalMediaUrl remain untouched for reveal mode
       await updateDoc(r, {
         deleted: true,
         deletedForEveryone: true,
@@ -216,11 +254,27 @@ export function useMessages(roomId: string, currentUserId: string | null) {
 
   const markViewOnceViewed = useCallback(
     async (messageId: string) => {
-      await updateDoc(doc(db, "rooms", roomId, "messages", messageId), {
+      if (!currentUserId) return;
+      const messageRef = doc(db, "rooms", roomId, "messages", messageId);
+      // Firestore-level guard: avoid redundant writes across reloads/devices.
+      const snap = await getDoc(messageRef);
+      const data = snap.data() as { openedBy?: string[]; expiresAt?: number | null } | undefined;
+      if (data?.openedBy?.includes(currentUserId)) return;
+      if (typeof data?.expiresAt === "number") return;
+      const openedAt = Date.now();
+      const safeTimer = Number.isFinite(viewOnceTimerMs) && viewOnceTimerMs > 0 ? viewOnceTimerMs : 15_000;
+      const expiresAt = openedAt + safeTimer;
+
+      await updateDoc(messageRef, {
+        openedBy: arrayUnion(currentUserId),
+        openedAt,
+        expiresAt,
+        openedAtServer: serverTimestamp(),
+        // keep legacy field in sync to avoid breaking old clients
         viewOnceViewed: true,
       });
     },
-    [roomId]
+    [roomId, currentUserId, viewOnceTimerMs]
   );
 
   const searchMessages = useCallback(

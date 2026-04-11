@@ -5,13 +5,16 @@ import { cn } from "@/lib/utils";
 type Props = {
   onSend: (blob: Blob) => void;
   onCancel: () => void;
+  disabled?: boolean;
 };
 
-export default function VideoNoteRecorder({ onSend, onCancel }: Props) {
+export default function VideoNoteRecorder({ onSend, onCancel, disabled = false }: Props) {
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [previewReady, setPreviewReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -21,7 +24,6 @@ export default function VideoNoteRecorder({ onSend, onCancel }: Props) {
   const MAX_SECONDS = 60;
 
   useEffect(() => {
-    startPreview();
     return () => stopPreview();
   }, []);
 
@@ -30,28 +32,44 @@ export default function VideoNoteRecorder({ onSend, onCancel }: Props) {
   }, [seconds, recording]);
 
   const startPreview = async () => {
+    if (streamRef.current) return true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: 240, height: 240 },
+        video: true,
         audio: true,
       });
+      setPermissionError(null);
       streamRef.current = stream;
+      setPreviewReady(true);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.muted = true;
       }
-    } catch {
-      // Camera unavailable
+      return true;
+    } catch (err) {
+      const e = err as DOMException;
+      if (e.name === "NotAllowedError" || e.name === "PermissionDeniedError") {
+        setPermissionError("Camera/Microphone access denied. Please allow permissions.");
+      } else {
+        setPermissionError("Camera/Microphone unavailable on this device.");
+      }
+      setPreviewReady(false);
+      return false;
     }
   };
 
   const stopPreview = () => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setPreviewReady(false);
   };
 
-  const start = useCallback(() => {
-    if (!streamRef.current) return;
+  const start = useCallback(async () => {
+    if (disabled) return;
+    const ok = await startPreview();
+    if (!ok || !streamRef.current) return;
+    if (streamRef.current.getTracks().length === 0) return;
     chunksRef.current = [];
     const mr = new MediaRecorder(streamRef.current);
     mediaRecorderRef.current = mr;
@@ -66,11 +84,13 @@ export default function VideoNoteRecorder({ onSend, onCancel }: Props) {
     setRecording(true);
     setSeconds(0);
     timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
-  }, []);
+  }, [disabled]);
 
   const stop = useCallback(() => {
     mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
     if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
     setRecording(false);
   }, []);
 
@@ -160,10 +180,13 @@ export default function VideoNoteRecorder({ onSend, onCancel }: Props) {
 
         {!videoBlob ? (
           <button
-            onClick={recording ? stop : start}
+            onClick={recording ? stop : () => { if (!disabled) void start(); }}
+            disabled={disabled}
             className={cn(
               "w-14 h-14 rounded-full flex items-center justify-center transition-all active:scale-95 shadow-lg",
-              recording
+              disabled
+                ? "bg-white/10 text-white/30 cursor-not-allowed shadow-none"
+                : recording
                 ? "bg-rose-500 hover:bg-rose-600 shadow-rose-500/30"
                 : "bg-gradient-to-r from-pink-500 to-violet-600 shadow-pink-500/30"
             )}
@@ -185,7 +208,17 @@ export default function VideoNoteRecorder({ onSend, onCancel }: Props) {
       </div>
 
       <p className="text-white/25 text-xs text-center">
-        {recording ? "Recording… tap to stop" : videoBlob ? "Preview ready" : "Tap to start recording"}
+        {permissionError
+          ? permissionError
+          : disabled
+            ? "Video notes disabled by admin"
+          : recording
+            ? "Recording… tap to stop"
+            : videoBlob
+              ? "Preview ready"
+              : previewReady
+                ? "Tap to start recording"
+                : "Tap to enable camera and start recording"}
       </p>
     </div>
   );

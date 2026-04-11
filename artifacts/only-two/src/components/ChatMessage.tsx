@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, memo } from "react";
 import {
   Trash2,
   Reply,
@@ -11,8 +11,10 @@ import {
   X,
   Pencil,
   Lock,
+  Phone,
+  Video,
 } from "lucide-react";
-import { cn, formatTime } from "@/lib/utils";
+import { cn, formatTime, formatCallDuration } from "@/lib/utils";
 import type { Message } from "@/hooks/useMessages";
 import TextWithLinks from "@/components/LinkPreview";
 
@@ -39,6 +41,10 @@ type Props = {
   dpUrl?: string | null;
   showDeleted?: boolean;
   readReceiptsEnabled?: boolean;
+  viewOnceEnabled?: boolean;
+  viewOnceTimerMs?: number;
+  imageDownloadProtection?: boolean;
+  onCallAgain?: (type: "audio" | "video") => void;
 };
 
 const WAVEFORM = [4, 7, 12, 18, 22, 28, 24, 16, 10, 20, 30, 26, 14, 8, 22, 18, 12, 6, 16, 24];
@@ -105,39 +111,224 @@ function AudioPlayer({ url }: { url: string }) {
   );
 }
 
+function CanvasImage({
+  src,
+  className,
+  alt,
+  onClick,
+}: {
+  src: string;
+  className?: string;
+  alt?: string;
+  onClick?: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let localBlobUrl: string | null = null;
+
+    const load = async () => {
+      try {
+        const res = await fetch(src);
+        const blob = await res.blob();
+        if (cancelled) return;
+        localBlobUrl = URL.createObjectURL(blob);
+        setBlobUrl(localBlobUrl);
+      } catch {
+        setBlobUrl(null);
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+      if (localBlobUrl) URL.revokeObjectURL(localBlobUrl);
+    };
+  }, [src]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !blobUrl) return;
+    const img = new Image();
+    img.onload = () => {
+      const maxW = 260;
+      const maxH = 300;
+      const ratio = Math.min(maxW / img.width, maxH / img.height, 1);
+      const w = Math.round(img.width * ratio);
+      const h = Math.round(img.height * ratio);
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+    };
+    img.src = blobUrl;
+  }, [blobUrl]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className={className}
+      aria-label={alt}
+      onClick={onClick}
+      draggable={false}
+      onContextMenu={(e) => e.preventDefault()}
+      style={{ userSelect: "none" }}
+    />
+  );
+}
+
 // ─── Fullscreen viewer ───────────────────────────────────────────────────────
-function FullscreenViewer({ url, type, onClose }: { url: string; type: "image" | "video"; onClose: () => void }) {
+function FullscreenViewer({
+  url,
+  type,
+  onClose,
+  imageDownloadProtection = true,
+}: { url: string; type: "image" | "video"; onClose: () => void; imageDownloadProtection?: boolean }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", h);
+      document.body.style.overflow = "";
+    };
   }, [onClose]);
 
+  useEffect(() => {
+    if (type !== "image") return undefined;
+    let cancelled = false;
+    let localBlobUrl: string | null = null;
+    const run = async () => {
+      try {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        if (cancelled) return;
+        localBlobUrl = URL.createObjectURL(blob);
+        setBlobUrl(localBlobUrl);
+      } catch {
+        setBlobUrl(null);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+      if (localBlobUrl) URL.revokeObjectURL(localBlobUrl);
+    };
+  }, [url, type]);
+
   return (
-    <div className="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center" style={{ animation: "fadeIn 0.2s ease-out" }} onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-lg flex items-center justify-center"
+      style={{ animation: "fadeIn 0.2s ease-out", userSelect: "none" }}
+      onClick={onClose}
+      onContextMenu={(e) => {
+        if (imageDownloadProtection) e.preventDefault();
+      }}
+    >
       <button onClick={onClose} className="absolute top-4 right-4 z-10 p-2.5 rounded-full bg-white/10 hover:bg-white/20 transition text-white">
         <X className="w-5 h-5" />
       </button>
       {type === "image" ? (
-        <img src={url} alt="Full view" className="max-w-full max-h-full object-contain rounded-xl" style={{ animation: "scaleIn 0.2s ease-out" }} onClick={(e) => e.stopPropagation()} />
+        <img
+          src={blobUrl ?? url}
+          alt="Full view"
+          className="max-w-full max-h-full object-contain rounded-xl"
+          style={{ animation: "scaleIn 0.2s ease-out" }}
+          onClick={(e) => e.stopPropagation()}
+          draggable={imageDownloadProtection ? false : true}
+          onContextMenu={(e) => {
+            if (imageDownloadProtection) e.preventDefault();
+          }}
+        />
       ) : (
-        <video src={url} autoPlay controls playsInline className="max-w-full max-h-full rounded-xl" onClick={(e) => e.stopPropagation()} />
+        <video
+          src={url}
+          autoPlay
+          controls
+          playsInline
+          className="max-w-full max-h-full rounded-xl"
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        />
       )}
     </div>
   );
 }
 
 // ─── View-once media ─────────────────────────────────────────────────────────
-function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted }: {
-  message: Message; isOwn: boolean; onViewOnce: (id: string) => void; limitText: string; showDeleted: boolean;
+function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted, viewOnceTimerMs = 15_000, imageDownloadProtection = true }: {
+  message: Message; isOwn: boolean; onViewOnce: (id: string) => void; limitText: string; showDeleted: boolean; viewOnceTimerMs?: number; imageDownloadProtection?: boolean;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
+  const [tick, setTick] = useState(0);
   const hasStar = limitText.includes("*️⃣");
+  const viewLockRef = useRef(false);
+  const closedByExpiryRef = useRef(false);
+  const openedBy = message.openedBy ?? [];
+  const opened = openedBy.length > 0;
+  const openedAt = message.openedAt ?? null;
+  const effectiveExpiresAt = openedAt ? openedAt + viewOnceTimerMs : null;
+  const expiresAt = effectiveExpiresAt ?? message.expiresAt ?? null;
+  const isExpired = !!expiresAt && Date.now() >= expiresAt;
+  const canReceiverView = !isOwn && opened && !isExpired;
+
+  useEffect(() => {
+    // Reset one-shot local guard when message identity changes.
+    viewLockRef.current = false;
+    closedByExpiryRef.current = false;
+  }, [message.id]);
+
+  useEffect(() => {
+    if (!expiresAt || isOwn) return undefined;
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) {
+      setFullscreen(false);
+      return undefined;
+    }
+    const id = setTimeout(() => {
+      setFullscreen(false);
+      setTick((v) => v + 1);
+    }, remaining);
+    return () => clearTimeout(id);
+  }, [expiresAt, isOwn, tick]);
+
+  useEffect(() => {
+    if (!expiresAt || isOwn || !fullscreen) return undefined;
+
+    const closeIfExpired = () => {
+      if (closedByExpiryRef.current) return;
+      if (Date.now() >= expiresAt) {
+        closedByExpiryRef.current = true;
+        setFullscreen(false);
+        setTick((v) => v + 1);
+      }
+    };
+
+    const interval = setInterval(closeIfExpired, 1000);
+    document.addEventListener("visibilitychange", closeIfExpired);
+    window.addEventListener("focus", closeIfExpired);
+    closeIfExpired();
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", closeIfExpired);
+      window.removeEventListener("focus", closeIfExpired);
+    };
+  }, [expiresAt, fullscreen, isOwn]);
 
   const revealUrl = showDeleted ? (message.originalMediaUrl ?? message.mediaUrl ?? null) : null;
 
   const handleClose = useCallback(() => {
     setFullscreen(false);
+    if (viewLockRef.current) return;
+    viewLockRef.current = true;
     onViewOnce(message.id);
   }, [message.id, onViewOnce]);
 
@@ -145,10 +336,22 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted }: {
   if (showDeleted && revealUrl && message.viewOnceViewed && !isOwn) {
     return (
       <>
-        {fullscreen && <FullscreenViewer url={revealUrl} type={message.type as "image" | "video"} onClose={() => setFullscreen(false)} />}
+        {fullscreen && <FullscreenViewer url={revealUrl} type={message.type as "image" | "video"} onClose={() => setFullscreen(false)} imageDownloadProtection={imageDownloadProtection} />}
         <button onClick={() => setFullscreen(true)} className="relative block rounded-xl overflow-hidden border border-amber-400/30" style={{ maxWidth: 260, maxHeight: 300 }}>
           {message.type === "image" && (
-            <img src={revealUrl} alt="Revealed" className="max-w-[260px] max-h-[300px] object-cover rounded-xl opacity-80" loading="lazy" />
+            imageDownloadProtection ? (
+              <CanvasImage
+                src={revealUrl}
+                alt="Revealed"
+                className="max-w-[260px] max-h-[300px] rounded-xl opacity-80"
+              />
+            ) : (
+              <img
+                src={revealUrl}
+                alt="Revealed"
+                className="max-w-[260px] max-h-[300px] rounded-xl opacity-80"
+              />
+            )
           )}
           {message.type === "video" && (
             <video src={revealUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
@@ -161,7 +364,7 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted }: {
     );
   }
 
-  if (message.viewOnceViewed) {
+  if ((opened && isExpired) || (message.viewOnceViewed && !isOwn && !opened)) {
     return (
       <div className={cn(
         "flex items-center justify-center gap-2 rounded-xl px-4 py-6 min-w-[180px]",
@@ -179,35 +382,111 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted }: {
 
   return (
     <>
-      {fullscreen && message.mediaUrl && <FullscreenViewer url={message.mediaUrl} type={message.type as "image" | "video"} onClose={handleClose} />}
+      {fullscreen && message.mediaUrl && <FullscreenViewer url={message.mediaUrl} type={message.type as "image" | "video"} onClose={handleClose} imageDownloadProtection={imageDownloadProtection} />}
       <button
-        onClick={() => { if (!isOwn && !message.viewOnceViewed) setFullscreen(true); }}
+        onClick={() => {
+          if (isOwn && message.mediaUrl) {
+            setFullscreen(true);
+            return;
+          }
+          if (!isOwn && canReceiverView && message.mediaUrl) {
+            setFullscreen(true);
+            return;
+          }
+          if (!isOwn && !opened) {
+            if (!viewLockRef.current) {
+              viewLockRef.current = true;
+              onViewOnce(message.id);
+            }
+            setFullscreen(true);
+          }
+        }}
         className={cn(
           "flex items-center justify-center gap-2 rounded-xl w-full min-w-[180px] overflow-hidden relative",
           isOwn ? "bg-white/10" : "bg-black border border-white/10"
         )}
         style={{ height: 140 }}
       >
-        {message.mediaUrl && message.type === "image" && !isOwn && (
-          <img src={message.mediaUrl} alt="view once" className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40" />
+        {message.mediaUrl && message.type === "image" && !isOwn && !canReceiverView && (
+          imageDownloadProtection ? (
+            <CanvasImage
+              src={message.mediaUrl}
+              alt="view once"
+              className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40"
+            />
+          ) : (
+            <img
+              src={message.mediaUrl}
+              alt="view once"
+              className="absolute inset-0 w-full h-full object-cover blur-2xl scale-110 opacity-40"
+            />
+          )
         )}
         <div className="relative z-10 text-center">
           {isOwn ? (
-            <>
-              <EyeOff className="w-6 h-6 mx-auto mb-1 opacity-50" />
-              <p className="text-xs text-white/60">View once</p>
-              <p className="text-[10px] opacity-40 mt-0.5">Awaiting view</p>
-            </>
-          ) : (
-            <>
-              <div className="w-14 h-14 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center mb-2 mx-auto">
-                <Eye className="w-6 h-6 text-white" />
+            message.type === "image" && message.mediaUrl ? (
+              <div className="relative">
+                {imageDownloadProtection ? (
+                  <CanvasImage
+                    src={message.mediaUrl}
+                    alt="view once sender"
+                    className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
+                  />
+                ) : (
+                  <img
+                    src={message.mediaUrl}
+                    alt="view once sender"
+                    className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
+                  />
+                )}
+                <div className="absolute bottom-2 left-2 text-[10px] bg-black/50 rounded-full px-2 py-0.5 text-white/80">
+                  {opened ? "Opened" : "Awaiting view"}
+                </div>
               </div>
-              <p className="text-sm font-semibold text-white">Tap to view</p>
-              <p className="text-[10px] text-white/40 mt-0.5">
-                {message.type === "video" ? "Video" : "Photo"} · View once
-              </p>
-            </>
+            ) : message.type === "video" && message.mediaUrl ? (
+              <div className="relative">
+                <video src={message.mediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+                <div className="absolute bottom-2 left-2 text-[10px] bg-black/50 rounded-full px-2 py-0.5 text-white/80">
+                  {opened ? "Opened" : "Awaiting view"}
+                </div>
+              </div>
+            ) : (
+              <>
+                <EyeOff className="w-6 h-6 mx-auto mb-1 opacity-50" />
+                <p className="text-xs text-white/60">View once</p>
+                <p className="text-[10px] opacity-40 mt-0.5">{opened ? "Opened" : "Awaiting view"}</p>
+              </>
+            )
+          ) : (
+            canReceiverView ? (
+              message.type === "image" && message.mediaUrl ? (
+                imageDownloadProtection ? (
+                  <CanvasImage
+                    src={message.mediaUrl}
+                    alt="view once opened"
+                    className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
+                  />
+                ) : (
+                  <img
+                    src={message.mediaUrl}
+                    alt="view once opened"
+                    className="max-w-[260px] max-h-[300px] rounded-xl object-cover"
+                  />
+                )
+              ) : message.type === "video" && message.mediaUrl ? (
+                <video src={message.mediaUrl} className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
+              ) : null
+            ) : (
+              <>
+                <div className="w-14 h-14 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center mb-2 mx-auto">
+                  <Eye className="w-6 h-6 text-white" />
+                </div>
+                <p className="text-sm font-semibold text-white">Tap to view</p>
+                <p className="text-[10px] text-white/40 mt-0.5">
+                  {message.type === "video" ? "Video" : "Photo"} · View once
+                </p>
+              </>
+            )
           )}
         </div>
       </button>
@@ -219,9 +498,9 @@ function ViewOnceMedia({ message, isOwn, onViewOnce, limitText, showDeleted }: {
 const SWIPE_TRIGGER = 62;   // px to trigger reply
 const SWIPE_MAX    = 110;   // max visual travel
 
-export default function ChatMessage({
+function ChatMessage({
   message,
-  isOwn,
+  isOwn: _isOwn,
   currentUserId,
   onDelete,
   onDeleteForMe,
@@ -242,7 +521,13 @@ export default function ChatMessage({
   dpUrl,
   showDeleted = false,
   readReceiptsEnabled = true,
+  viewOnceEnabled = true,
+  viewOnceTimerMs = 15_000,
+  imageDownloadProtection = true,
+  onCallAgain,
 }: Props) {
+  void _isOwn;
+  const isOwn = message.senderId === currentUserId;
   const [showActions, setShowActions] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [showDeleteMenu, setShowDeleteMenu] = useState(false);
@@ -357,6 +642,11 @@ export default function ChatMessage({
   };
 
   const isDeletedForMe = !!(currentUserId && message.deletedFor?.[currentUserId]);
+  const isCallMessage =
+    message.type === "call" &&
+    (message.callType === "audio" || message.callType === "video") &&
+    !!message.callStatus;
+  const isRingingCall = isCallMessage && message.callStatus === "not_picked";
 
   // ── Deleted for everyone ──────────────────────────────────────────────────
   if (message.deleted || message.deletedForEveryone) {
@@ -407,9 +697,13 @@ export default function ChatMessage({
       onDoubleClick={handleDoubleClick}
     >
       {/* Other user avatar */}
-      {!isOwn && dpUrl && (
+      {!isOwn && (
         <div className="flex-shrink-0 mr-1.5 mb-1 self-end">
-          <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10" />
+          {dpUrl ? (
+            <img src={dpUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover ring-1 ring-white/10" />
+          ) : (
+            <div className="w-6 h-6 rounded-full bg-gray-700 ring-1 ring-white/10" />
+          )}
         </div>
       )}
 
@@ -532,8 +826,8 @@ export default function ChatMessage({
               isGhost
                 ? "bg-violet-900/20 border border-dashed border-violet-500/40 text-violet-200/80 opacity-70 rounded-br-sm"
                 : isOwn
-                ? "bg-gradient-to-br from-pink-500 to-violet-600 text-white rounded-br-sm shadow-lg shadow-pink-500/20"
-                : "bg-white/8 backdrop-blur-sm border border-white/10 text-white rounded-bl-sm"
+                ? "bg-pink-500 text-white rounded-br-sm shadow-lg shadow-pink-500/20"
+                : "bg-gray-800 border border-gray-700 text-white rounded-bl-sm"
             )}
             style={{ animation: "msgFadeIn 0.2s ease-out" }}
           >
@@ -556,29 +850,85 @@ export default function ChatMessage({
             )}
 
             <div className="px-4 py-2.5">
+              {isCallMessage && (
+                <button
+                  type="button"
+                  onClick={() => onCallAgain?.(message.callType!)}
+                  className={cn(
+                    "mb-2 max-w-[70%] px-4 py-3 rounded-2xl shadow-sm cursor-pointer active:scale-95 transition-all duration-150 hover:scale-[1.02]",
+                    isOwn
+                      ? "ml-auto bg-[#005c4b] text-white"
+                      : "mr-auto bg-[#202c33] text-white",
+                    isRingingCall && "ringing-bubble"
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={cn(
+                        "text-xl",
+                        message.callStatus === "missed" || message.callStatus === "not_picked"
+                          ? "text-red-400"
+                          : "text-green-400",
+                        isRingingCall && "ringing-icon"
+                      )}
+                    >
+                      {message.callType === "video" ? <Video className="w-5 h-5" /> : <Phone className="w-5 h-5" />}
+                    </div>
+
+                    <div className="flex flex-col text-left">
+                      <span className="text-sm font-semibold">
+                        {message.callStatus === "calling"
+                          ? (isOwn ? "Calling…" : "Incoming call")
+                          : message.callStatus === "missed"
+                          ? (isOwn ? "Called (not picked)" : "Missed call")
+                          : message.callStatus === "declined"
+                          ? (isOwn ? "Call rejected" : "Call declined")
+                          : message.callStatus === "completed"
+                          ? (isOwn ? "Outgoing call" : "Incoming call")
+                          : (isOwn ? "Called (not picked)" : "Missed call")}
+                      </span>
+                      <span className="text-xs opacity-70">
+                        {!!message.duration && message.callStatus === "completed"
+                          ? formatCallDuration(message.duration)
+                          : formatTime(message.createdAt)}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              )}
+
               {message.type === "text" && message.text && (
                 <TextWithLinks text={message.text} isOwn={isOwn} />
               )}
 
-              {(message.type === "image" || message.type === "video") && message.viewOnce ? (
+              {(message.type === "image" || message.type === "video") && message.viewOnce && viewOnceEnabled ? (
                 <ViewOnceMedia
                   message={message}
                   isOwn={isOwn}
                   onViewOnce={onViewOnce ?? (() => {})}
                   limitText={viewOnceLimitText}
                   showDeleted={showDeleted}
+                  viewOnceTimerMs={viewOnceTimerMs}
+                  imageDownloadProtection={imageDownloadProtection}
                 />
               ) : (
                 <>
                   {message.type === "image" && message.mediaUrl && (
-                    <a href={message.mediaUrl} target="_blank" rel="noopener noreferrer" className="block">
-                      <img
-                        src={message.mediaUrl}
-                        alt="Image"
-                        className="max-w-[260px] max-h-[300px] rounded-xl object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                        loading="lazy"
-                      />
-                    </a>
+                    <button type="button" className="block" onClick={() => {}}>
+                      {imageDownloadProtection ? (
+                        <CanvasImage
+                          src={message.mediaUrl}
+                          alt="Image"
+                          className="max-w-[260px] max-h-[300px] rounded-xl object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                        />
+                      ) : (
+                        <img
+                          src={message.mediaUrl}
+                          alt="Image"
+                          className="max-w-[260px] max-h-[300px] rounded-xl object-cover cursor-pointer hover:opacity-90 transition-opacity"
+                        />
+                      )}
+                    </button>
                   )}
                   {message.type === "video" && message.mediaUrl && (
                     <video src={message.mediaUrl} controls className="max-w-[260px] max-h-[300px] rounded-xl" playsInline />
@@ -590,10 +940,10 @@ export default function ChatMessage({
                 <AudioPlayer url={message.mediaUrl} />
               )}
 
-              <div className={cn("flex items-center gap-1.5 mt-1", isOwn ? "justify-end" : "justify-start")}>
+              <div className={cn("flex items-center gap-1.5 mt-1", isOwn ? "justify-end text-right" : "justify-start text-left")}>
                 {message.edited && <span className="text-[9px] opacity-35 italic">edited</span>}
                 {isGhost && <span className="text-[9px] text-violet-400/50 italic">ghost</span>}
-                <span className="text-[10px] opacity-40">{formatTime(message.createdAt)}</span>
+                {!isCallMessage && <span className="text-[10px] opacity-40">{formatTime(message.createdAt)}</span>}
                 {isOwn && !isGhost && (
                   <span className="opacity-50">
                     {readReceiptsEnabled && message.seen ? (
@@ -641,7 +991,24 @@ export default function ChatMessage({
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         @keyframes reactionPop { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        @keyframes ringingBubble {
+          0%, 100% { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 0 rgba(239, 68, 68, 0); }
+          50% { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 2px rgba(239, 68, 68, 0.14); }
+        }
+        @keyframes ringingIcon {
+          0%, 100% { transform: scale(1); opacity: 0.95; }
+          50% { transform: scale(1.06); opacity: 1; }
+        }
+        .ringing-bubble {
+          animation: ringingBubble 1.85s ease-in-out infinite;
+        }
+        .ringing-icon {
+          animation: ringingIcon 1.2s ease-in-out infinite;
+          transform-origin: center;
+        }
       `}</style>
     </div>
   );
 }
+
+export default memo(ChatMessage);
