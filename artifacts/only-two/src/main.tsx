@@ -7,7 +7,7 @@ import {
 } from "./envGate";
 console.log("ENV CHECK:", import.meta.env);
 console.log("BUILD VERSION:", "v2-new");
-console.log("BUILD VERSION:", "v3-final");
+console.log("🔥 BUILD V3 ACTIVE - REAL");
 const __force = "rebuild-" + Date.now();
 
 
