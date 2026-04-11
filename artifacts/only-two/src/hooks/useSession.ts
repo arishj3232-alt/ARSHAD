@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   doc,
   setDoc,
-  updateDoc,
   deleteDoc,
   collection,
   getDocs,
@@ -75,10 +74,11 @@ async function getAdminRoomCode(): Promise<string> {
 async function markOffline(roomCode: string, userId: string): Promise<void> {
   const now = Date.now();
   try {
-    await updateDoc(doc(db, "rooms", roomCode, "presence", userId), {
-      online: false,
-      lastSeenTs: now,
-    });
+    await setDoc(
+      doc(db, "rooms", roomCode, "presence", userId),
+      { online: false, lastSeenTs: now },
+      { merge: true }
+    );
   } catch {}
   try {
     const sid = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(TAB_SESSION_STORAGE_KEY) : null;
@@ -130,7 +130,11 @@ export function useSession() {
 
     if (unloadHandlerRef.current) window.removeEventListener("beforeunload", unloadHandlerRef.current);
     const handleUnload = () => {
-      updateDoc(doc(db, "rooms", roomCode, "presence", userId), { online: false, lastSeenTs: Date.now() }).catch(() => {});
+      setDoc(
+        doc(db, "rooms", roomCode, "presence", userId),
+        { online: false, lastSeenTs: Date.now() },
+        { merge: true }
+      ).catch(() => {});
       set(rtdbRef, { status: "offline", ts: Date.now() }).catch(() => {});
     };
     unloadHandlerRef.current = handleUnload;

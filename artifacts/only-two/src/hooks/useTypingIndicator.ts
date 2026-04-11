@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ref, set, onValue, onDisconnect } from "firebase/database";
-import { doc, updateDoc, deleteField } from "firebase/firestore";
+import { doc, setDoc, deleteField } from "firebase/firestore";
 import { db, rtdb } from "@/lib/firebase";
 
 const TYPING_STALE_MS = 4500;
@@ -41,9 +41,9 @@ export function useTypingIndicator(roomId: string, userId: string | null) {
       try {
         const pRef = doc(db, "rooms", roomId, "presence", userId);
         if (typing) {
-          void updateDoc(pRef, { typing: true, typingAt: Date.now() });
+          void setDoc(pRef, { typing: true, typingAt: Date.now() }, { merge: true });
         } else {
-          void updateDoc(pRef, { typing: false, typingAt: deleteField() });
+          void setDoc(pRef, { typing: false, typingAt: deleteField() }, { merge: true });
         }
       } catch {
         /* presence doc may not exist yet */
