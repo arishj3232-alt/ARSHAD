@@ -8,17 +8,17 @@ import {
   runTransaction,
   onSnapshot,
 } from "firebase/firestore";
-import { ref, set, onDisconnect, onValue, get, serverTimestamp, update } from "firebase/database";
+import { ref, set, onDisconnect, onValue, serverTimestamp, update } from "firebase/database";
 import { db, rtdb } from "@/lib/firebase";
 import {
   LS_SESSION_KEY,
-  SESSION_TTL_MS,
   parsePersistedSession,
   writePersistedSession,
   clearPersistedSession,
   bumpPersistedSessionActivity,
 } from "@/lib/persistedSession";
 import { getOrCreatePersistentUserId } from "@/lib/identity";
+import { getRoomRouting } from "@/lib/roomConfig";
 import { getOrCreateTabSessionId, TAB_SESSION_STORAGE_KEY } from "@/lib/tabSessionId";
 import {
   PRESENCE_HEARTBEAT_MS,
@@ -26,7 +26,6 @@ import {
   isPresenceLive,
 } from "@/hooks/usePresence";
 
-const ENV_ROOM_CODE = (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi";
 const MAX_OTHER_USERS = 1;
 const JOIN_DELAY_MS = 400;
 
@@ -60,16 +59,6 @@ function resolveRoleIdentity(role: SessionRole): RoleIdentity {
     return { role: "arshad", userName: "Arshad" };
   }
   throw new Error("Invalid role");
-}
-
-async function getAdminRoomCode(): Promise<string> {
-  try {
-    const snap = await get(ref(rtdb, "admin/settings/roomCode"));
-    const code = snap.val() as string | null;
-    return code?.trim() || ENV_ROOM_CODE;
-  } catch {
-    return ENV_ROOM_CODE;
-  }
 }
 
 function roleSlotRef(roomCode: string, role: SessionRole) {
@@ -228,7 +217,14 @@ export function useSession() {
 
       const persisted = parsePersistedSession(localStorage.getItem(LS_SESSION_KEY));
       const identityId = getOrCreatePersistentUserId();
+      const { firestoreRoomId: serverFr } = await getRoomRouting();
       if (persisted && persisted.userId !== identityId) {
+        clearPersistedSession();
+        sessionStorage.clear();
+        if (!cancelled) setIsRecoveringSession(false);
+        return;
+      }
+      if (persisted && persisted.firestoreRoomId !== serverFr) {
         clearPersistedSession();
         sessionStorage.clear();
         if (!cancelled) setIsRecoveringSession(false);
@@ -248,23 +244,22 @@ export function useSession() {
         if (!storedUserId) {
           sessionStorage.setItem("onlytwo-user-id", persisted.userId);
           sessionStorage.setItem("onlytwo-role", persisted.role);
-          sessionStorage.setItem("onlytwo-room", persisted.roomCode);
+          sessionStorage.setItem("onlytwo-room", serverFr);
           sessionStorage.setItem(
             "onlytwo-user-name",
             persisted.role === "shelly" ? "Shelly" : "Arshad"
           );
           storedUserId = persisted.userId;
           storedRoleRaw = persisted.role;
-          storedRoom = persisted.roomCode;
-        } else if (
-          storedUserId !== persisted.userId ||
-          storedRoom !== persisted.roomCode ||
-          storedRoleRaw !== persisted.role
-        ) {
+          storedRoom = serverFr;
+        } else if (storedUserId !== persisted.userId || storedRoleRaw !== persisted.role) {
           clearPersistedSession();
           sessionStorage.clear();
           if (!cancelled) setIsRecoveringSession(false);
           return;
+        } else if (storedRoom !== serverFr) {
+          sessionStorage.setItem("onlytwo-room", serverFr);
+          storedRoom = serverFr;
         }
       }
 
@@ -281,7 +276,7 @@ export function useSession() {
       const storedRole = storedRoleRaw as SessionRole;
       try {
         await claimRoleSlot(
-          storedRoom,
+          serverFr,
           storedRole,
           storedUserId,
           storedRole === "shelly" ? "Shelly" : "Arshad"
@@ -290,7 +285,7 @@ export function useSession() {
         const userName = sessionStorage.getItem("onlytwo-user-name") ?? fallbackName;
         sessionStorage.setItem("onlytwo-user-name", userName);
         if (!cancelled) {
-          armOnlineLifecycle(storedRoom, storedUserId, userName, storedRole);
+          armOnlineLifecycle(serverFr, storedUserId, userName, storedRole);
           setIsRecoveringSession(false);
         }
       } catch (e) {
@@ -321,9 +316,9 @@ export function useSession() {
     roomCode: string;
   }) => {
     void name;
-    const normalizedRoomCode = roomCode.trim();
-    const validCode = await getAdminRoomCode();
-    if (normalizedRoomCode !== validCode.trim()) {
+    const normalizedDoor = roomCode.trim();
+    const { doorCode, firestoreRoomId } = await getRoomRouting();
+    if (normalizedDoor !== doorCode) {
       setCodeError("Wrong room code. This space is only for two.");
       return;
     }
@@ -339,12 +334,12 @@ export function useSession() {
     sessionStorage.setItem("onlytwo-user-id", userId);
     sessionStorage.setItem("onlytwo-user-name", resolvedName);
     sessionStorage.setItem("onlytwo-role", selectedRole);
-    sessionStorage.setItem("onlytwo-room", normalizedRoomCode);
+    sessionStorage.setItem("onlytwo-room", firestoreRoomId);
 
     try {
       await new Promise<void>((resolve) => setTimeout(resolve, JOIN_DELAY_MS));
 
-      const presenceCol = collection(db, "rooms", normalizedRoomCode, "presence");
+      const presenceCol = collection(db, "rooms", firestoreRoomId, "presence");
       const presenceSnap = await getDocs(presenceCol);
       const now = Date.now();
 
@@ -360,10 +355,10 @@ export function useSession() {
         return;
       }
 
-      await claimRoleSlot(normalizedRoomCode, selectedRole, userId, resolvedName);
+      await claimRoleSlot(firestoreRoomId, selectedRole, userId, resolvedName);
 
       await setDoc(
-        doc(db, "rooms", normalizedRoomCode, "presence", userId),
+        doc(db, "rooms", firestoreRoomId, "presence", userId),
         {
           id: userId,
           name: resolvedName,
@@ -374,7 +369,7 @@ export function useSession() {
         },
         { merge: true }
       );
-      armOnlineLifecycle(normalizedRoomCode, userId, resolvedName, selectedRole);
+      armOnlineLifecycle(firestoreRoomId, userId, resolvedName, selectedRole);
     } catch (err) {
       clearPersistedSession();
       sessionStorage.clear();
@@ -478,18 +473,6 @@ export function useSession() {
       window.removeEventListener("keydown", onActivity);
     };
   }, [state.status]);
-
-  useEffect(() => {
-    if (state.status !== "active") return undefined;
-    const tick = () => {
-      const p = parsePersistedSession(localStorage.getItem(LS_SESSION_KEY));
-      if (!p || Date.now() - p.lastActive > SESSION_TTL_MS) {
-        void leaveRoom();
-      }
-    };
-    const id = window.setInterval(tick, 60_000);
-    return () => clearInterval(id);
-  }, [state.status, leaveRoom]);
 
   return { state, codeError, joinRoom, leaveRoom, isRecoveringSession };
 }

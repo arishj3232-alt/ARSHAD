@@ -1,70 +1,65 @@
 export const LS_SESSION_KEY = "session";
 export const LS_LAST_ACTIVE_KEY = "lastActive";
 
-/** Inactivity TTL — session restore + server-side interval use the same window. */
-export const SESSION_TTL_MS = 30 * 60 * 1000;
-
 export type PersistedSession = {
-  roomCode: string;
+  /** Stable Firestore + RTDB scope (messages, presence, role slots) — not the join door. */
+  firestoreRoomId: string;
   role: "shelly" | "arshad";
   userId: string;
   lastActive: number;
 };
 
-function parseSessionPayload(raw: string | null): Omit<PersistedSession, "lastActive"> & { lastActive?: number } | null {
+function parseSessionPayload(
+  raw: string | null
+): Omit<PersistedSession, "lastActive"> & { lastActive?: number } | null {
   if (raw == null || raw === "") return null;
   try {
     const s = JSON.parse(raw) as unknown;
     if (!s || typeof s !== "object") return null;
     const o = s as Record<string, unknown>;
-    const roomCode = o.roomCode;
     const role = o.role;
     const userId = o.userId;
-    if (typeof roomCode !== "string" || !roomCode.trim()) return null;
-    const rc = roomCode.trim();
+    const fromNew = typeof o.firestoreRoomId === "string" && o.firestoreRoomId.trim();
+    const fromLegacy = typeof o.roomCode === "string" && o.roomCode.trim();
+    const firestoreRoomId = (fromNew ? o.firestoreRoomId : fromLegacy ? o.roomCode : "") as string;
+    const fr = firestoreRoomId.trim();
+    if (!fr) return null;
     if (role !== "shelly" && role !== "arshad") return null;
     if (typeof userId !== "string" || userId.length < 8) return null;
-    /* Reject legacy composite ids (`${room}_${role}`) — require UUID-only sessions. */
     if (userId.includes("_")) return null;
     const lastActive =
       typeof o.lastActive === "number" && o.lastActive > 0 ? o.lastActive : undefined;
-    return { roomCode: rc, role, userId, lastActive };
+    return { firestoreRoomId: fr, role, userId, lastActive };
   } catch {
     return null;
   }
 }
 
 /**
- * Validates shape + TTL. Clears expired entries from localStorage.
- * Legacy payloads without `lastActive` are treated as fresh (migration).
+ * Validates shape. Session persists until explicit logout (no idle TTL eviction).
  */
 export function parsePersistedSession(raw: string | null): PersistedSession | null {
   const base = parseSessionPayload(raw);
   if (!base) return null;
   const lastActive = base.lastActive ?? Date.now();
-  if (Date.now() - lastActive > SESSION_TTL_MS) {
-    try {
-      localStorage.removeItem(LS_SESSION_KEY);
-    } catch {
-      /* */
-    }
-    return null;
-  }
-  return { roomCode: base.roomCode, role: base.role, userId: base.userId, lastActive };
+  return { firestoreRoomId: base.firestoreRoomId, role: base.role, userId: base.userId, lastActive };
 }
 
-export function writePersistedSession(roomCode: string, role: "shelly" | "arshad", userId: string): void {
+export function writePersistedSession(
+  firestoreRoomId: string,
+  role: "shelly" | "arshad",
+  userId: string
+): void {
   try {
     localStorage.setItem(
       LS_SESSION_KEY,
-      JSON.stringify({ roomCode, role, userId, lastActive: Date.now() })
+      JSON.stringify({ firestoreRoomId, role, userId, lastActive: Date.now() })
     );
   } catch {
     /* quota / private mode */
   }
 }
 
-/** Bump `lastActive` without TTL check — for user activity listeners while already in-session. */
 export function bumpPersistedSessionActivity(): void {
   try {
     const base = parseSessionPayload(localStorage.getItem(LS_SESSION_KEY));
@@ -73,7 +68,7 @@ export function bumpPersistedSessionActivity(): void {
     localStorage.setItem(
       LS_SESSION_KEY,
       JSON.stringify({
-        roomCode: base.roomCode,
+        firestoreRoomId: base.firestoreRoomId,
         role: base.role,
         userId: base.userId,
         lastActive,

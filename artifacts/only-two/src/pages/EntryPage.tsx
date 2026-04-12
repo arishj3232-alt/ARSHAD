@@ -4,6 +4,7 @@ import { collection, onSnapshot } from "firebase/firestore";
 import { cn } from "@/lib/utils";
 import { db } from "@/lib/firebase";
 import { getOrCreatePersistentUserId } from "@/lib/identity";
+import { getRoomRouting } from "@/lib/roomConfig";
 import { PRESENCE_ONLINE_MAX_AGE_MS } from "@/hooks/usePresence";
 
 type Props = {
@@ -29,47 +30,63 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
   });
 
   useEffect(() => {
-    const normalizedRoom = code.trim();
-    if (!normalizedRoom) {
+    const doorGuess = code.trim();
+    if (!doorGuess) {
       setRoleBlocked({ shelly: false, arshad: false });
       return undefined;
     }
-    const myId = getOrCreatePersistentUserId();
-    const slotsCol = collection(db, "rooms", normalizedRoom, "roleSlots");
-    const unsub = onSnapshot(slotsCol, (snap) => {
-      const now = Date.now();
-      let nextShellyBlocked = false;
-      let nextArshadBlocked = false;
-      snap.docs.forEach((d) => {
-        const data = d.data() as { holderUserId?: string; heartbeatAt?: number };
-        const hb = typeof data.heartbeatAt === "number" ? data.heartbeatAt : 0;
-        const holder = data.holderUserId;
-        const active = typeof holder === "string" && holder.length > 0 && now - hb < PRESENCE_ONLINE_MAX_AGE_MS;
-        if (!active) return;
-        const occupiedForMe = holder !== myId;
-        if (d.id === "shelly") nextShellyBlocked = occupiedForMe;
-        if (d.id === "arshad") nextArshadBlocked = occupiedForMe;
-      });
-      setRoleBlocked((prev) => {
-        (["shelly", "arshad"] as const).forEach((k) => {
-          const next = k === "shelly" ? nextShellyBlocked : nextArshadBlocked;
-          if (!prev[k] && next) {
-            setTakenAnim((a) => ({ ...a, [k]: true }));
-            setTimeout(() => {
-              setTakenAnim((a) => ({ ...a, [k]: false }));
-            }, 260);
-          }
+    let cancelled = false;
+    let unsub: (() => void) | null = null;
+
+    void (async () => {
+      const { doorCode, firestoreRoomId } = await getRoomRouting();
+      if (cancelled) return;
+      if (doorGuess !== doorCode) {
+        setRoleBlocked({ shelly: false, arshad: false });
+        return;
+      }
+      if (cancelled) return;
+      const myId = getOrCreatePersistentUserId();
+      const slotsCol = collection(db, "rooms", firestoreRoomId, "roleSlots");
+      unsub = onSnapshot(slotsCol, (snap) => {
+        const now = Date.now();
+        let nextShellyBlocked = false;
+        let nextArshadBlocked = false;
+        snap.docs.forEach((d) => {
+          const data = d.data() as { holderUserId?: string; heartbeatAt?: number };
+          const hb = typeof data.heartbeatAt === "number" ? data.heartbeatAt : 0;
+          const holder = data.holderUserId;
+          const active = typeof holder === "string" && holder.length > 0 && now - hb < PRESENCE_ONLINE_MAX_AGE_MS;
+          if (!active) return;
+          const occupiedForMe = holder !== myId;
+          if (d.id === "shelly") nextShellyBlocked = occupiedForMe;
+          if (d.id === "arshad") nextArshadBlocked = occupiedForMe;
         });
-        return { shelly: nextShellyBlocked, arshad: nextArshadBlocked };
+        setRoleBlocked((prev) => {
+          (["shelly", "arshad"] as const).forEach((k) => {
+            const next = k === "shelly" ? nextShellyBlocked : nextArshadBlocked;
+            if (!prev[k] && next) {
+              setTakenAnim((a) => ({ ...a, [k]: true }));
+              setTimeout(() => {
+                setTakenAnim((a) => ({ ...a, [k]: false }));
+              }, 260);
+            }
+          });
+          return { shelly: nextShellyBlocked, arshad: nextArshadBlocked };
+        });
+        setRole((prev) => {
+          if (!prev) return prev;
+          if (prev === "shelly" && nextShellyBlocked) return null;
+          if (prev === "arshad" && nextArshadBlocked) return null;
+          return prev;
+        });
       });
-      setRole((prev) => {
-        if (!prev) return prev;
-        if (prev === "shelly" && nextShellyBlocked) return null;
-        if (prev === "arshad" && nextArshadBlocked) return null;
-        return prev;
-      });
-    });
-    return () => unsub();
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, [code]);
 
   const handleSubmit = async (e: React.FormEvent) => {

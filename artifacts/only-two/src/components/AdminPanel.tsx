@@ -252,6 +252,15 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
                     defaultValue={settings.roomCode}
                     onBlur={(e) => { const v = e.target.value.trim(); if (v) onUpdate("roomCode", v); }}
                   />
+                  <p className="text-white/35 text-[11px] mt-2 leading-relaxed">
+                    Chat history stays under the storage id
+                    {settings.chatSpaceId?.trim() ? (
+                      <span className="text-white/50 font-mono"> {settings.chatSpaceId.trim()}</span>
+                    ) : (
+                      <span className="text-white/50"> (same as this code until first save)</span>
+                    )}
+                    . Changing only this join code does not move messages.
+                  </p>
                 </div>
               </div>
 

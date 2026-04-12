@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { ref, onValue, update } from "firebase/database";
+import { ref, onValue, update, get } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 export type ReplyMode = "tap" | "swipe" | "both";
@@ -47,6 +47,8 @@ export type AdminSettings = {
   ghostKeyword: string;
   readReceiptKeyword: string;
   roomCode: string;
+  /** Stable Firestore path `rooms/{chatSpaceId}/…`; set once so changing join code keeps chat history. */
+  chatSpaceId?: string;
 };
 
 export const DEFAULT_SETTINGS: AdminSettings = {
@@ -87,6 +89,7 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   ghostKeyword: "bhoot",
   readReceiptKeyword: "ONOFF",
   roomCode: (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi",
+  chatSpaceId: "",
 };
 
 function parseKeywordArray(
@@ -149,6 +152,10 @@ export function useAdmin() {
             "readReceiptKeyword",
             DEFAULT_SETTINGS.readReceiptKeywords
           );
+          const dChat = typeof d.chatSpaceId === "string" ? d.chatSpaceId.trim() : "";
+          if (!dChat && typeof data.roomCode === "string" && data.roomCode.trim()) {
+            void update(ref(rtdb, "admin/settings"), { chatSpaceId: data.roomCode.trim() });
+          }
           setSettings({
             ...DEFAULT_SETTINGS,
             ...data,
@@ -223,6 +230,18 @@ export function useAdmin() {
             readReceiptKeywords: arr,
             readReceiptKeyword: arr[0] ?? "",
           });
+          return;
+        }
+        if (key === "roomCode") {
+          const v = String(value).trim();
+          if (!v) return;
+          const snap = await get(ref(rtdb, "admin/settings"));
+          const cur = snap.val() as { chatSpaceId?: string } | null;
+          const patch: Record<string, string> = { roomCode: v };
+          if (!cur?.chatSpaceId?.trim()) {
+            patch.chatSpaceId = v;
+          }
+          await update(ref(rtdb, "admin/settings"), patch);
           return;
         }
         await update(ref(rtdb, "admin/settings"), { [key]: value });

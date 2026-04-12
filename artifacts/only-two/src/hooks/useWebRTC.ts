@@ -70,6 +70,9 @@ const CONNECTING_TIMEOUT_MS = 10_000;
 const MAX_RETRIES = 2;
 const MAX_BATCH_DELETE = 400;
 
+/** Another participant already has an in-flight or live call — block simultaneous dial. */
+const PEER_ACTIVE_CALL_STATUSES = new Set(["calling", "connecting", "connected"]);
+
 async function deleteCollectionDocs(
   roomId: string,
   callId: string,
@@ -762,6 +765,28 @@ export function useWebRTC(
       const stream = await getMedia(type);
       if (!stream) {
         setCallState("idle");
+        return;
+      }
+
+      try {
+        const existingSnap = await getDocs(collection(db, "rooms", roomId, "calls"));
+        const peerBusy = existingSnap.docs.some((d) => {
+          const x = d.data();
+          const st = typeof x.status === "string" ? x.status : "";
+          if (!PEER_ACTIVE_CALL_STATUSES.has(st)) return false;
+          const caller = x.callerId;
+          return typeof caller === "string" && caller !== userId;
+        });
+        if (peerBusy) {
+          stream.getTracks().forEach((t) => t.stop());
+          setCallState("idle");
+          setConnectionError("Busy");
+          return;
+        }
+      } catch {
+        stream.getTracks().forEach((t) => t.stop());
+        setCallState("idle");
+        setConnectionError("Could not check call status. Try again.");
         return;
       }
 
