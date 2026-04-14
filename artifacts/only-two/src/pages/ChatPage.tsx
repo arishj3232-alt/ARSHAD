@@ -140,8 +140,13 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   const currentRole = (() => {
     try {
       const raw = sessionStorage.getItem("onlytwo-role");
-      return raw === "shelly" || raw === "arshad" ? raw : null;
+      if (raw === "shelly" || raw === "arshad") return raw;
+      if (userName === "Tanvi") return "shelly";
+      if (userName === "Arshad") return "arshad";
+      return null;
     } catch {
+      if (userName === "Tanvi") return "shelly";
+      if (userName === "Arshad") return "arshad";
       return null;
     }
   })();

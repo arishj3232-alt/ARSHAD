@@ -84,7 +84,14 @@ function buildOutgoingMessageDoc(
       const raw = sessionStorage.getItem("onlytwo-role");
       return raw === "shelly" || raw === "arshad" ? raw : null;
     } catch {
-      return null;
+      try {
+        const persisted = localStorage.getItem("session");
+        if (!persisted) return null;
+        const parsed = JSON.parse(persisted) as { role?: unknown };
+        return parsed.role === "shelly" || parsed.role === "arshad" ? parsed.role : null;
+      } catch {
+        return null;
+      }
     }
   })();
   const originalMediaType: Message["originalMediaType"] =
