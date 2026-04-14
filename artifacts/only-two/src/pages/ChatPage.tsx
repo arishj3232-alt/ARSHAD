@@ -204,8 +204,28 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     }
   }, [onLeaveRoom]);
 
-  // Derive the other user from live presence — do NOT rely on the null otherId prop
-  const otherUser = Object.values(presence).find((u) => u.id !== userId) ?? null;
+  const expectedPeerName = useMemo(() => {
+    const roleFromSession = (() => {
+      try {
+        const raw = sessionStorage.getItem("onlytwo-role");
+        return raw === "shelly" || raw === "arshad" ? raw : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (roleFromSession === "shelly") return "Arshad";
+    if (roleFromSession === "arshad") return "Shelly";
+    return userName === "Shelly" ? "Arshad" : "Shelly";
+  }, [userName]);
+
+  // Derive peer from live presence, preferring the opposite role/name.
+  const otherUser = useMemo(() => {
+    const others = Object.values(presence).filter((u) => u.id !== userId);
+    const preferred = others.find(
+      (u) => u.name.trim().toLowerCase() === expectedPeerName.toLowerCase()
+    );
+    return preferred ?? others[0] ?? null;
+  }, [presence, userId, expectedPeerName]);
   const resolvedOtherId = otherUser?.id ?? otherId ?? null;
   const otherName = otherUser?.name
     ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
