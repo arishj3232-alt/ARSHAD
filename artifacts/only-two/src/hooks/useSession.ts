@@ -183,7 +183,6 @@ export function useSession() {
         { merge: true }
       ).catch(() => {});
       void touchRoleSlotHeartbeat(roomCode, role, userId).catch(() => {});
-      set(rtdbRef, { status: "online", ts }).catch(() => {});
     }, PRESENCE_HEARTBEAT_MS);
 
     activeUserIdRef.current = userId;

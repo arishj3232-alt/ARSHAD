@@ -117,6 +117,34 @@ function deriveReceiptStatus(data: Record<string, unknown>): ReceiptStatus {
   return "sent";
 }
 
+function parseCreatedAt(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof value === "object" && value !== null) {
+    const withToDate = value as { toDate?: () => Date };
+    if (typeof withToDate.toDate === "function") {
+      const d = withToDate.toDate();
+      return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+    }
+    const sec = (value as { seconds?: unknown }).seconds;
+    const ns = (value as { nanoseconds?: unknown }).nanoseconds;
+    if (typeof sec === "number" && Number.isFinite(sec)) {
+      const ms = sec * 1000 + (typeof ns === "number" && Number.isFinite(ns) ? ns / 1_000_000 : 0);
+      const d = new Date(ms);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+  }
+  return null;
+}
+
 function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message {
   const data = d.data();
   return {
@@ -150,7 +178,7 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
     callType: data.callType as CallMediaType | undefined,
     callStatus: data.callStatus as CallMessageStatus | undefined,
     duration: typeof data.duration === "number" ? data.duration : undefined,
-    createdAt: (data.createdAt as { toDate: () => Date } | null)?.toDate() ?? null,
+    createdAt: parseCreatedAt(data.createdAt),
     receiptStatus: deriveReceiptStatus(data),
   };
 }

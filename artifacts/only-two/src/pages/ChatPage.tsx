@@ -47,7 +47,7 @@ import { useNotifications } from "@/hooks/useNotifications";
 import { handleKeywordNormalized, normalize, resolveKeywordLists } from "@/lib/chatKeywords";
 import { useVibrationPreference } from "@/hooks/useVibrationPreference";
 import { useProfile } from "@/hooks/useProfile";
-import { useUserStatus, useOtherUserStatus } from "@/hooks/useUserStatus";
+import { useUserStatus, useOtherUserStatus } from "../hooks/useUserStatus";
 import ChatMessage from "@/components/ChatMessage";
 import VideoNoteRecorder from "@/components/VideoNoteRecorder";
 import HoldSwipeRecordOverlay from "@/components/HoldSwipeRecordOverlay";
@@ -1001,7 +1001,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     let currentDate = "";
     displayMessages.forEach((msg) => {
       if (msg.ghost && msg.senderId !== userId) return;
-      const d = msg.createdAt ? formatDate(msg.createdAt) : "Today";
+      const d = msg.createdAt ? formatDate(msg.createdAt) : "Unknown date";
       if (d !== currentDate) { groups.push({ date: d, msgs: [] }); currentDate = d; }
       groups[groups.length - 1].msgs.push(msg);
     });
