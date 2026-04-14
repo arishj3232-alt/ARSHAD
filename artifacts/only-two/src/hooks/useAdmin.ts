@@ -152,9 +152,11 @@ export function useAdmin() {
             "readReceiptKeyword",
             DEFAULT_SETTINGS.readReceiptKeywords
           );
+          const dRoom = typeof data.roomCode === "string" ? data.roomCode.trim() : "";
           const dChat = typeof d.chatSpaceId === "string" ? d.chatSpaceId.trim() : "";
-          if (!dChat && typeof data.roomCode === "string" && data.roomCode.trim()) {
-            void update(ref(rtdb, "admin/settings"), { chatSpaceId: data.roomCode.trim() });
+          // Hard auto-sync: storage room follows roomCode (also covers manual RTDB edits).
+          if (dRoom && dChat !== dRoom) {
+            void update(ref(rtdb, "admin/settings"), { chatSpaceId: dRoom });
           }
           setSettings({
             ...DEFAULT_SETTINGS,
