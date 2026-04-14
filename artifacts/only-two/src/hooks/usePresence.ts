@@ -6,6 +6,7 @@ import { db } from "@/lib/firebase";
 export type PresenceUser = {
   id: string;
   name: string;
+  role: "shelly" | "arshad" | null;
   joinedAt: Date | null;
   online: boolean;
   lastSeen: Date | null;
@@ -73,6 +74,7 @@ export function usePresence(_currentUserId: string | null, roomCode: string | nu
           users[d.id] = {
             id: d.id,
             name: displayNameFromDoc(data),
+            role: data.role === "shelly" || data.role === "arshad" ? data.role : null,
             joinedAt: null,
             online: live,
             lastSeen: ts ? new Date(ts) : null,

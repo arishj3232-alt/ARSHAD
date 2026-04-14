@@ -204,7 +204,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     }
   }, [onLeaveRoom]);
 
-  const expectedPeerName = useMemo(() => {
+  const expectedPeer = useMemo(() => {
     const roleFromSession = (() => {
       try {
         const raw = sessionStorage.getItem("onlytwo-role");
@@ -213,19 +213,23 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         return null;
       }
     })();
-    if (roleFromSession === "shelly") return "Arshad";
-    if (roleFromSession === "arshad") return "Tanvi";
-    return userName === "Tanvi" ? "Arshad" : "Tanvi";
+    if (roleFromSession === "shelly") return { role: "arshad" as const, name: "Arshad" as const };
+    if (roleFromSession === "arshad") return { role: "shelly" as const, name: "Tanvi" as const };
+    return userName === "Tanvi"
+      ? { role: "arshad" as const, name: "Arshad" as const }
+      : { role: "shelly" as const, name: "Tanvi" as const };
   }, [userName]);
 
-  // Derive peer from live presence, preferring the opposite role/name.
+  // Derive peer from live presence, preferring opposite role then opposite display name.
   const otherUser = useMemo(() => {
     const others = Object.values(presence).filter((u) => u.id !== userId);
-    const preferred = others.find(
-      (u) => u.name.trim().toLowerCase() === expectedPeerName.toLowerCase()
+    const byRole = others.find((u) => u.role === expectedPeer.role);
+    if (byRole) return byRole;
+    const byName = others.find(
+      (u) => u.name.trim().toLowerCase() === expectedPeer.name.toLowerCase()
     );
-    return preferred ?? others[0] ?? null;
-  }, [presence, userId, expectedPeerName]);
+    return byName ?? others[0] ?? null;
+  }, [presence, userId, expectedPeer]);
   const resolvedOtherId = otherUser?.id ?? otherId ?? null;
   const otherName = otherUser?.name
     ?? (Object.keys(presence).length === 0 ? "Connecting…" : "Waiting…");
