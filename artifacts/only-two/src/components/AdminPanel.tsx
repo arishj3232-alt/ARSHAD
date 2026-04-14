@@ -265,26 +265,6 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
                 </div>
               </div>
 
-              <div>
-                <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">Storage Room ID</p>
-                <div className="bg-white/3 border border-white/8 rounded-2xl px-4 py-3">
-                  <p className="text-white/40 text-xs mb-1.5">
-                    Firestore path key (`rooms/&lt;id&gt;/...`) for messages, calls, presence, and role slots.
-                  </p>
-                  <input
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-white text-sm font-mono focus:outline-none focus:border-pink-500/50 transition tracking-wider"
-                    defaultValue={settings.chatSpaceId?.trim() || settings.roomCode}
-                    onBlur={(e) => {
-                      const v = e.target.value.trim();
-                      if (v) onUpdate("chatSpaceId", v);
-                    }}
-                  />
-                  <p className="text-white/35 text-[11px] mt-2 leading-relaxed">
-                    Manual override for migration. Leave unchanged to preserve history.
-                  </p>
-                </div>
-              </div>
-
               {boolGroups.map((group) => (
                 <div key={group.title}>
                   <p className="text-white/30 text-[10px] uppercase tracking-widest mb-2 px-1">{group.title}</p>

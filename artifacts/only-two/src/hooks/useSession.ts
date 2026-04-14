@@ -155,6 +155,7 @@ export function useSession() {
   const activeRoleRef = useRef<string | null>(null);
   const activeRoomCodeRef = useRef<string | null>(null);
   const leaveRoomRef = useRef<(() => Promise<void>) | null>(null);
+  const roomSwitchingRef = useRef(false);
 
   const armOnlineLifecycle = useCallback((roomCode: string, userId: string, userName: string, role: SessionRole) => {
     const now = Date.now();
@@ -475,6 +476,80 @@ export function useSession() {
     );
     return () => unsub();
   }, [activeRoomCodeForSlot, activeUserIdForSlot]);
+
+  /** Runtime routing policy:
+   * - keepHistory=true  => keep writing to current storage room
+   * - keepHistory=false => migrate active session to latest roomCode
+   */
+  useEffect(() => {
+    if (state.status !== "active") return undefined;
+    const unsub = onValue(
+      ref(rtdb, "admin/settings"),
+      (snap) => {
+        const data = snap.val() as
+          | { roomCode?: string; keepChatHistoryOnRoomCodeChange?: boolean }
+          | null;
+        const nextRoom = typeof data?.roomCode === "string" ? data.roomCode.trim() : "";
+        const keepHistory =
+          typeof data?.keepChatHistoryOnRoomCodeChange === "boolean"
+            ? data.keepChatHistoryOnRoomCodeChange
+            : true;
+        if (!nextRoom || keepHistory) return;
+
+        const currentRoom = activeRoomCodeRef.current;
+        const currentUserId = activeUserIdRef.current;
+        const currentUserName =
+          state.status === "active" ? state.user.name : sessionStorage.getItem("onlytwo-user-name");
+        const currentRole = activeRoleRef.current;
+        if (!currentRoom || !currentUserId || !currentUserName) return;
+        if (currentRole !== "shelly" && currentRole !== "arshad") return;
+        if (nextRoom === currentRoom) return;
+        if (roomSwitchingRef.current) return;
+        roomSwitchingRef.current = true;
+
+        void (async () => {
+          try {
+            if (heartbeatRef.current) {
+              clearInterval(heartbeatRef.current);
+              heartbeatRef.current = null;
+            }
+            statusDisconnectRef.current?.cancel();
+            statusDisconnectRef.current = null;
+
+            await deleteDoc(doc(db, "rooms", currentRoom, "presence", currentUserId)).catch(() => {});
+            await releaseRoleSlot(currentRoom, currentRole).catch(() => {});
+
+            await claimRoleSlot(nextRoom, currentRole, currentUserId, currentUserName);
+            await setDoc(
+              doc(db, "rooms", nextRoom, "presence", currentUserId),
+              {
+                id: currentUserId,
+                name: currentUserName,
+                role: currentRole,
+                online: true,
+                lastSeenTs: Date.now(),
+                tabSessionId: getOrCreateTabSessionId(),
+              },
+              { merge: true }
+            ).catch(() => {});
+
+            sessionStorage.setItem("onlytwo-room", nextRoom);
+            armOnlineLifecycle(nextRoom, currentUserId, currentUserName, currentRole);
+          } catch {
+            await leaveRoomRef.current?.();
+          } finally {
+            roomSwitchingRef.current = false;
+          }
+        })();
+      },
+      () => {}
+    );
+    return () => unsub();
+  }, [
+    state.status,
+    state.status === "active" ? state.user.name : null,
+    armOnlineLifecycle,
+  ]);
 
   useEffect(() => {
     if (state.status !== "active") return undefined;
