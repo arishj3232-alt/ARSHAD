@@ -15,18 +15,16 @@ export async function getAdminRoomCode(): Promise<string> {
 }
 
 /**
- * Single RTDB read: door code + stable Firestore/RTDB room id for data (messages, presence, slots).
- * When `chatSpaceId` is unset, it defaults to the door code (legacy behavior).
+ * Single RTDB read for routing.
+ * Firestore room id follows the latest door code automatically.
  */
 export async function getRoomRouting(): Promise<{ doorCode: string; firestoreRoomId: string }> {
   try {
     const snap = await get(ref(rtdb, "admin/settings"));
-    const data = snap.val() as { roomCode?: string; chatSpaceId?: string } | null;
+    const data = snap.val() as { roomCode?: string } | null;
     const door =
       typeof data?.roomCode === "string" && data.roomCode.trim() ? data.roomCode.trim() : ENV_ROOM_CODE;
-    const sid =
-      typeof data?.chatSpaceId === "string" && data.chatSpaceId.trim() ? data.chatSpaceId.trim() : door;
-    return { doorCode: door, firestoreRoomId: sid };
+    return { doorCode: door, firestoreRoomId: door };
   } catch {
     return { doorCode: ENV_ROOM_CODE, firestoreRoomId: ENV_ROOM_CODE };
   }
