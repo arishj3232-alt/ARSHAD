@@ -98,7 +98,7 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
     }
     setRoleError("");
     setLoading(true);
-    await onJoin({ role, name: role === "shelly" ? "Shelly" : "Arshad", roomCode: code });
+    await onJoin({ role, name: role === "shelly" ? "Tanvi" : "Arshad", roomCode: code });
     setLoading(false);
     if (error) {
       setShake(true);
@@ -176,7 +176,7 @@ export default function EntryPage({ onJoin, error, blocked }: Props) {
                         : "bg-gray-900 text-gray-300 border-gray-700"
                     )}
                   >
-                    💖 Shelly{roleBlocked.shelly ? " - occupied" : ""}
+                    💖 Tanvi{roleBlocked.shelly ? " - occupied" : ""}
                   </button>
                   <button
                     type="button"

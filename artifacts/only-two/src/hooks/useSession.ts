@@ -48,12 +48,12 @@ export type SessionRole = "shelly" | "arshad";
 
 type RoleIdentity = {
   role: SessionRole;
-  userName: "Shelly" | "Arshad";
+  userName: "Tanvi" | "Arshad";
 };
 
 function resolveRoleIdentity(role: SessionRole): RoleIdentity {
   if (role === "shelly") {
-    return { role: "shelly", userName: "Shelly" };
+    return { role: "shelly", userName: "Tanvi" };
   }
   if (role === "arshad") {
     return { role: "arshad", userName: "Arshad" };
@@ -261,7 +261,7 @@ export function useSession() {
           sessionStorage.setItem("onlytwo-room", serverFr);
           sessionStorage.setItem(
             "onlytwo-user-name",
-            persisted.role === "shelly" ? "Shelly" : "Arshad"
+            persisted.role === "shelly" ? "Tanvi" : "Arshad"
           );
           storedUserId = persisted.userId;
           storedRoleRaw = persisted.role;
@@ -293,9 +293,9 @@ export function useSession() {
           serverFr,
           storedRole,
           storedUserId,
-          storedRole === "shelly" ? "Shelly" : "Arshad"
+          storedRole === "shelly" ? "Tanvi" : "Arshad"
         );
-        const fallbackName = storedRole === "shelly" ? "Shelly" : "Arshad";
+        const fallbackName = storedRole === "shelly" ? "Tanvi" : "Arshad";
         const userName = sessionStorage.getItem("onlytwo-user-name") ?? fallbackName;
         sessionStorage.setItem("onlytwo-user-name", userName);
         if (!cancelled) {

@@ -214,8 +214,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       }
     })();
     if (roleFromSession === "shelly") return "Arshad";
-    if (roleFromSession === "arshad") return "Shelly";
-    return userName === "Shelly" ? "Arshad" : "Shelly";
+    if (roleFromSession === "arshad") return "Tanvi";
+    return userName === "Tanvi" ? "Arshad" : "Tanvi";
   }, [userName]);
 
   // Derive peer from live presence, preferring the opposite role/name.

@@ -41,7 +41,7 @@ function displayNameFromDoc(data: Record<string, unknown>): string {
   const n = typeof data.name === "string" ? data.name.trim() : "";
   if (n) return n;
   const role = data.role;
-  if (role === "shelly") return "Shelly";
+  if (role === "shelly") return "Tanvi";
   if (role === "arshad") return "Arshad";
   return "Participant";
 }
