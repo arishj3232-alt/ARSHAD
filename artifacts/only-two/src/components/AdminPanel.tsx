@@ -24,6 +24,7 @@ const boolGroups: { title: string; rows: ToggleRow[] }[] = [
       { key: "readReceiptsEnabled", label: "Read receipts (room)" },
       { key: "repliesEnabled", label: "Replies" },
       { key: "reactionsEnabled", label: "Reactions" },
+      { key: "keepChatHistoryOnRoomCodeChange", label: "Keep chat history when room code changes" },
     ],
   },
   {
@@ -259,7 +260,7 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
                     ) : (
                       <span className="text-white/50"> (same as this code until first save)</span>
                     )}
-                    . Changing only this join code does not move messages.
+                    . Room-code changes follow the "Keep chat history" toggle below.
                   </p>
                 </div>
               </div>
@@ -279,7 +280,7 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
                     }}
                   />
                   <p className="text-white/35 text-[11px] mt-2 leading-relaxed">
-                    Change this only when you intentionally want to switch to a different Firestore room.
+                    Manual override for migration. Leave unchanged to preserve history.
                   </p>
                 </div>
               </div>

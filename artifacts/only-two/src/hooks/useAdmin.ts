@@ -49,6 +49,8 @@ export type AdminSettings = {
   roomCode: string;
   /** Stable Firestore path `rooms/{chatSpaceId}/…`; set once so changing join code keeps chat history. */
   chatSpaceId?: string;
+  /** If true, changing roomCode keeps storage room unchanged (history preserved). */
+  keepChatHistoryOnRoomCodeChange?: boolean;
 };
 
 export const DEFAULT_SETTINGS: AdminSettings = {
@@ -90,6 +92,7 @@ export const DEFAULT_SETTINGS: AdminSettings = {
   readReceiptKeyword: "ONOFF",
   roomCode: (import.meta.env.VITE_ROOM_CODE as string) ?? "ArshLovesTanvi",
   chatSpaceId: "",
+  keepChatHistoryOnRoomCodeChange: true,
 };
 
 function parseKeywordArray(
@@ -153,6 +156,10 @@ export function useAdmin() {
             DEFAULT_SETTINGS.readReceiptKeywords
           );
           const dChat = typeof d.chatSpaceId === "string" ? d.chatSpaceId.trim() : "";
+          const keepHistory =
+            typeof d.keepChatHistoryOnRoomCodeChange === "boolean"
+              ? d.keepChatHistoryOnRoomCodeChange
+              : true;
           if (!dChat && typeof data.roomCode === "string" && data.roomCode.trim()) {
             void update(ref(rtdb, "admin/settings"), { chatSpaceId: data.roomCode.trim() });
           }
@@ -178,6 +185,7 @@ export function useAdmin() {
             revealKeyword: revealKeywords[0] ?? DEFAULT_SETTINGS.revealKeyword,
             ghostKeyword: ghostKeywords[0] ?? DEFAULT_SETTINGS.ghostKeyword,
             readReceiptKeyword: readReceiptKeywords[0] ?? DEFAULT_SETTINGS.readReceiptKeyword,
+            keepChatHistoryOnRoomCodeChange: keepHistory,
           });
         },
         () => {}
@@ -235,7 +243,15 @@ export function useAdmin() {
         if (key === "roomCode") {
           const v = String(value).trim();
           if (!v) return;
-          await update(ref(rtdb, "admin/settings"), { roomCode: v });
+          const keepHistory =
+            settings.keepChatHistoryOnRoomCodeChange === undefined
+              ? true
+              : settings.keepChatHistoryOnRoomCodeChange;
+          if (keepHistory) {
+            await update(ref(rtdb, "admin/settings"), { roomCode: v });
+          } else {
+            await update(ref(rtdb, "admin/settings"), { roomCode: v, chatSpaceId: v });
+          }
           return;
         }
         await update(ref(rtdb, "admin/settings"), { [key]: value });

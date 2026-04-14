@@ -21,11 +21,21 @@ export async function getAdminRoomCode(): Promise<string> {
 export async function getRoomRouting(): Promise<{ doorCode: string; firestoreRoomId: string }> {
   try {
     const snap = await get(ref(rtdb, "admin/settings"));
-    const data = snap.val() as { roomCode?: string; chatSpaceId?: string } | null;
+    const data = snap.val() as {
+      roomCode?: string;
+      chatSpaceId?: string;
+      keepChatHistoryOnRoomCodeChange?: boolean;
+    } | null;
     const door =
       typeof data?.roomCode === "string" && data.roomCode.trim() ? data.roomCode.trim() : ENV_ROOM_CODE;
+    const keepHistory =
+      typeof data?.keepChatHistoryOnRoomCodeChange === "boolean"
+        ? data.keepChatHistoryOnRoomCodeChange
+        : true;
     const sid =
-      typeof data?.chatSpaceId === "string" && data.chatSpaceId.trim() ? data.chatSpaceId.trim() : door;
+      keepHistory
+        ? (typeof data?.chatSpaceId === "string" && data.chatSpaceId.trim() ? data.chatSpaceId.trim() : door)
+        : door;
     return { doorCode: door, firestoreRoomId: sid };
   } catch {
     return { doorCode: ENV_ROOM_CODE, firestoreRoomId: ENV_ROOM_CODE };
