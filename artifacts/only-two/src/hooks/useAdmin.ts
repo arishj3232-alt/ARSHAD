@@ -152,11 +152,9 @@ export function useAdmin() {
             "readReceiptKeyword",
             DEFAULT_SETTINGS.readReceiptKeywords
           );
-          const dRoom = typeof data.roomCode === "string" ? data.roomCode.trim() : "";
           const dChat = typeof d.chatSpaceId === "string" ? d.chatSpaceId.trim() : "";
-          // Hard auto-sync: storage room follows roomCode (also covers manual RTDB edits).
-          if (dRoom && dChat !== dRoom) {
-            void update(ref(rtdb, "admin/settings"), { chatSpaceId: dRoom });
+          if (!dChat && typeof data.roomCode === "string" && data.roomCode.trim()) {
+            void update(ref(rtdb, "admin/settings"), { chatSpaceId: data.roomCode.trim() });
           }
           setSettings({
             ...DEFAULT_SETTINGS,
@@ -237,8 +235,7 @@ export function useAdmin() {
         if (key === "roomCode") {
           const v = String(value).trim();
           if (!v) return;
-          // Keep join code and storage room id in sync automatically.
-          await update(ref(rtdb, "admin/settings"), { roomCode: v, chatSpaceId: v });
+          await update(ref(rtdb, "admin/settings"), { roomCode: v });
           return;
         }
         await update(ref(rtdb, "admin/settings"), { [key]: value });

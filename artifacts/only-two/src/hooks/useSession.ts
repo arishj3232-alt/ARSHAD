@@ -211,6 +211,7 @@ export function useSession() {
     writePersistedSession(roomCode, role, userId);
   }, []);
 
+
   useEffect(() => {
     return () => {
       if (heartbeatRef.current) clearInterval(heartbeatRef.current);

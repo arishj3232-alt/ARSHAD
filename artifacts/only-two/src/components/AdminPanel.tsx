@@ -259,7 +259,7 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
                     ) : (
                       <span className="text-white/50"> (same as this code until first save)</span>
                     )}
-                    . Changing room code now also switches Firestore storage automatically.
+                    . Changing only this join code does not move messages.
                   </p>
                 </div>
               </div>
@@ -279,7 +279,7 @@ export default function AdminPanel({ settings, onUpdate, onClose, currentUserId,
                     }}
                   />
                   <p className="text-white/35 text-[11px] mt-2 leading-relaxed">
-                    Advanced override. Note: updating Room Code will auto-sync this value again.
+                    Change this only when you intentionally want to switch to a different Firestore room.
                   </p>
                 </div>
               </div>
