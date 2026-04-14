@@ -147,8 +147,12 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   })();
   const isOwnMessage = useCallback(
     (m: Message): boolean => {
-      if (currentRole && (m.senderRole === "shelly" || m.senderRole === "arshad")) {
-        return m.senderRole === currentRole;
+      if (currentRole) {
+        if (m.senderRole === "shelly" || m.senderRole === "arshad") {
+          return m.senderRole === currentRole;
+        }
+        // Legacy docs without senderRole: avoid collapsing both roles into same side.
+        return false;
       }
       return m.senderId === userId;
     },
