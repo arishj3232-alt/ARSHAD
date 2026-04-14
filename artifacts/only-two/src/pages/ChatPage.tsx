@@ -69,7 +69,9 @@ const TYPING_DEBOUNCE_MS = 1500;
 
 function isSameGroup(prev: Message | undefined, curr: Message): boolean {
   if (!prev) return false;
-  if (prev.senderId !== curr.senderId) return false;
+  const prevOwner = prev.senderRole ?? prev.senderId;
+  const currOwner = curr.senderRole ?? curr.senderId;
+  if (prevOwner !== currOwner) return false;
   const a = prev.createdAt?.getTime() ?? 0;
   const b = curr.createdAt?.getTime() ?? 0;
   return Math.abs(b - a) < 120_000;
@@ -135,6 +137,23 @@ const STATUS_DOT: Record<string, { color: string; label: string }> = {
 
 export default function ChatPage({ userId, userName, roomCode, otherId, onForceLogout, onLeaveRoom }: Props) {
   const ROOM_ID = roomCode;
+  const currentRole = (() => {
+    try {
+      const raw = sessionStorage.getItem("onlytwo-role");
+      return raw === "shelly" || raw === "arshad" ? raw : null;
+    } catch {
+      return null;
+    }
+  })();
+  const isOwnMessage = useCallback(
+    (m: Message): boolean => {
+      if (currentRole && (m.senderRole === "shelly" || m.senderRole === "arshad")) {
+        return m.senderRole === currentRole;
+      }
+      return m.senderId === userId;
+    },
+    [currentRole, userId]
+  );
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   const [editingMsg, setEditingMsg] = useState<Message | null>(null);
@@ -413,11 +432,11 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
   );
 
   const displayMessages = useMemo(() => {
-    const base = messages.filter((m) => !(m.ghost && m.senderId !== userId));
+    const base = messages.filter((m) => !(m.ghost && !isOwnMessage(m)));
     const merged = [...base, ...optimisticMessages];
     merged.sort((a, b) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0));
     return merged;
-  }, [messages, optimisticMessages, userId]);
+  }, [messages, optimisticMessages, isOwnMessage]);
 
   useEffect(() => {
     const pending = optimisticPendingRef.current;
@@ -606,7 +625,13 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
         lastSeenRef.add(docSnap.id);
 
         const data = docSnap.data() as Record<string, unknown>;
-        if (data.senderId === userId) return;
+        const senderRole = data.senderRole;
+        if (
+          (currentRole && (senderRole === "shelly" || senderRole === "arshad") && senderRole === currentRole) ||
+          (!currentRole && data.senderId === userId)
+        ) {
+          return;
+        }
         if (data.deleted === true) return;
         if (data.ghost === true) return;
 
@@ -729,7 +754,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     // Same tail message => no-op (covers prepends and snapshot re-emits).
     if (lastMessage.id === lastMessageIdRef.current) return;
 
-    const isIncoming = lastMessage.senderId !== userId;
+    const isIncoming = !isOwnMessage(lastMessage);
     if (isIncoming) {
       if (!(nearBottomRef.current || isNearBottom())) {
         setNewMessageCount((prev) => prev + 1);
@@ -743,7 +768,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     }
 
     lastMessageIdRef.current = lastMessage.id;
-  }, [messages, userId, isNearBottom, scrollToBottom]);
+  }, [messages, userId, isNearBottom, scrollToBottom, isOwnMessage]);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -1004,7 +1029,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
     const groups: { date: string; msgs: Message[] }[] = [];
     let currentDate = "";
     displayMessages.forEach((msg) => {
-      if (msg.ghost && msg.senderId !== userId) return;
+      if (msg.ghost && !isOwnMessage(msg)) return;
       const d = msg.createdAt ? formatDate(msg.createdAt) : "Unknown date";
       if (d !== currentDate) { groups.push({ date: d, msgs: [] }); currentDate = d; }
       groups[groups.length - 1].msgs.push(msg);
@@ -1167,8 +1192,8 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                     >
                       <ChatMessage
                         message={msg}
-                        isOwn={msg.senderId === userId}
-                        hidePeerAvatar={inGroup && msg.senderId !== userId}
+                        isOwn={isOwnMessage(msg)}
+                        hidePeerAvatar={inGroup && !isOwnMessage(msg)}
                         compactInGroup={inGroup}
                         currentUserId={userId}
                         onDelete={handleDeleteForEveryone}
@@ -1187,7 +1212,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
                         replyMode={settings.replyMode}
                         deletedForEveryoneText={settings.deletedText}
                         viewOnceLimitText={settings.viewOnceLimitText}
-                        dpUrl={msg.senderId !== userId ? otherDpUrl : null}
+                        dpUrl={!isOwnMessage(msg) ? otherDpUrl : null}
                         revealDeletedContent={revealDeletedContent}
                         onPeerProfileClick={() =>
                           setProfileModal({ name: otherName, dpUrl: otherDpUrl, bio: null })
@@ -1517,7 +1542,7 @@ export default function ChatPage({ userId, userName, roomCode, otherId, onForceL
       {/* Side panels */}
       {panel === "search" && (
         <div className={cn("flex-shrink-0", isMobileDevice ? "fixed inset-y-0 right-0 w-full max-w-sm z-40 shadow-2xl" : "w-72 sm:w-80")}>
-          <SearchPanel messages={messages.filter((m) => !m.ghost || m.senderId === userId)} onScrollTo={(id) => { scrollToMessage(id); setPanel("none"); }} onClose={() => setPanel("none")} currentUserId={userId} otherName={otherName} />
+          <SearchPanel messages={messages.filter((m) => !m.ghost || isOwnMessage(m))} onScrollTo={(id) => { scrollToMessage(id); setPanel("none"); }} onClose={() => setPanel("none")} currentUserId={userId} otherName={otherName} />
         </div>
       )}
       {panel === "gallery" && (

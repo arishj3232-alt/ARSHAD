@@ -27,6 +27,7 @@ export type CallMediaType = "audio" | "video";
 export type Message = {
   id: string;
   senderId: string;
+  senderRole?: "shelly" | "arshad" | null;
   type: MessageType;
   callType?: CallMediaType;
   callStatus?: CallMessageStatus;
@@ -78,10 +79,19 @@ function buildOutgoingMessageDoc(
 ): Record<string, unknown> {
   const text = payload.text ?? null;
   const mediaUrl = payload.mediaUrl ?? null;
+  const senderRole = (() => {
+    try {
+      const raw = sessionStorage.getItem("onlytwo-role");
+      return raw === "shelly" || raw === "arshad" ? raw : null;
+    } catch {
+      return null;
+    }
+  })();
   const originalMediaType: Message["originalMediaType"] =
     payload.type === "image" || payload.type === "video" || payload.type === "audio" ? payload.type : null;
   return {
     senderId: currentUserId,
+    senderRole,
     type: payload.type,
     callType: payload.callType ?? null,
     callStatus: payload.callStatus ?? null,
@@ -150,6 +160,10 @@ function mapDoc(d: { id: string; data: () => Record<string, unknown> }): Message
   return {
     id: d.id,
     senderId: data.senderId as string,
+    senderRole:
+      data.senderRole === "shelly" || data.senderRole === "arshad"
+        ? (data.senderRole as "shelly" | "arshad")
+        : null,
     type: (data.type as MessageType) ?? "text",
     text: data.text as string | undefined,
     mediaUrl: data.mediaUrl as string | undefined,
