@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { ref, onValue, update, get } from "firebase/database";
+import { ref, onValue, update } from "firebase/database";
 import { rtdb } from "@/lib/firebase";
 
 export type ReplyMode = "tap" | "swipe" | "both";
@@ -235,13 +235,8 @@ export function useAdmin() {
         if (key === "roomCode") {
           const v = String(value).trim();
           if (!v) return;
-          const snap = await get(ref(rtdb, "admin/settings"));
-          const cur = snap.val() as { chatSpaceId?: string } | null;
-          const patch: Record<string, string> = { roomCode: v };
-          if (!cur?.chatSpaceId?.trim()) {
-            patch.chatSpaceId = v;
-          }
-          await update(ref(rtdb, "admin/settings"), patch);
+          // Keep join code and storage room id in sync automatically.
+          await update(ref(rtdb, "admin/settings"), { roomCode: v, chatSpaceId: v });
           return;
         }
         await update(ref(rtdb, "admin/settings"), { [key]: value });
