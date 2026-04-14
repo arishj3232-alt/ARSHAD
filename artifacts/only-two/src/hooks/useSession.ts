@@ -100,14 +100,21 @@ async function touchRoleSlotHeartbeat(
   role: SessionRole,
   holderUserId: string
 ): Promise<void> {
-  await runTransaction(db, async (transaction) => {
-    const r = roleSlotRef(roomCode, role);
-    const snap = await transaction.get(r);
-    if (!snap.exists) return;
-    const d = snap.data() as { holderUserId?: string };
-    if (d.holderUserId !== holderUserId) return;
-    transaction.update(r, { heartbeatAt: Date.now() });
-  });
+  try {
+    await runTransaction(db, async (transaction) => {
+      const r = roleSlotRef(roomCode, role);
+      const snap = await transaction.get(r);
+      if (!snap.exists) return;
+      const d = snap.data() as { holderUserId?: string };
+      if (d.holderUserId !== holderUserId) return;
+      transaction.update(r, { heartbeatAt: Date.now() });
+    });
+  } catch (e) {
+    const code = (e as { code?: unknown })?.code;
+    // Benign contention in concurrent tabs/visibility flips; next heartbeat will retry.
+    if (code === "failed-precondition" || code === "aborted") return;
+    throw e;
+  }
 }
 
 async function releaseRoleSlot(roomCode: string, role: SessionRole): Promise<void> {
@@ -142,6 +149,7 @@ export function useSession() {
   const [isRecoveringSession, setIsRecoveringSession] = useState(true);
 
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const roleHeartbeatInFlightRef = useRef(false);
   const activeUserIdRef = useRef<string | null>(null);
   const statusDisconnectRef = useRef<{ cancel: () => void } | null>(null);
   const activeRoleRef = useRef<string | null>(null);
@@ -182,7 +190,14 @@ export function useSession() {
         { online: true, lastSeenTs: ts, tabSessionId: tabSid },
         { merge: true }
       ).catch(() => {});
-      void touchRoleSlotHeartbeat(roomCode, role, userId).catch(() => {});
+      if (!roleHeartbeatInFlightRef.current) {
+        roleHeartbeatInFlightRef.current = true;
+        void touchRoleSlotHeartbeat(roomCode, role, userId)
+          .catch(() => {})
+          .finally(() => {
+            roleHeartbeatInFlightRef.current = false;
+          });
+      }
     }, PRESENCE_HEARTBEAT_MS);
 
     activeUserIdRef.current = userId;
